@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
 from app.core.config import settings
-from app.api.routes import knowledge_base, chat, admin, documents
+from app.api.routes import knowledge_base, chat, admin, documents, qa
 from app.services.azure_services import AzureServiceManager
 from app.core.observability import observability, setup_fastapi_instrumentation
 from app.core.evaluation import setup_evaluation_framework
@@ -58,6 +58,22 @@ application.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@application.middleware("http")
+async def limit_upload_size(request: Request, call_next):
+    """Middleware to handle large file uploads for financial documents"""
+    if request.method == "POST" and "upload" in str(request.url).lower():
+        max_size = 100 * 1024 * 1024  # 100MB
+        content_length = request.headers.get("content-length")
+        
+        if content_length and int(content_length) > max_size:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"File too large. Maximum size allowed is {max_size // (1024*1024)}MB"}
+            )
+    
+    response = await call_next(request)
+    return response
 
 @application.middleware("http")
 async def track_requests(request: Request, call_next):
@@ -111,6 +127,7 @@ application.include_router(knowledge_base.router, prefix="/api/v1/knowledge-base
 application.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
 application.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 application.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
+application.include_router(qa.router, prefix="/api/v1/qa", tags=["QA"])
 
 @application.get("/")
 async def root():

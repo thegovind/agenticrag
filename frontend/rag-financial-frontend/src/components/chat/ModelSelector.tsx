@@ -7,15 +7,15 @@ import { Slider } from '@/components/ui/slider';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Settings, Brain, Search, Zap } from 'lucide-react';
-import { ChatSettings } from './ChatContainer';
+import { ModelSettings } from '../shared/ModelConfiguration';
 
 interface ModelSelectorProps {
   selectedModel: string;
   embeddingModel: string;
   onModelChange: (model: string) => void;
   onEmbeddingModelChange: (model: string) => void;
-  onSettingsChange: (settings: Partial<ChatSettings>) => void;
-  settings: ChatSettings;
+  onSettingsChange: (settings: Partial<ModelSettings>) => void;
+  settings: ModelSettings;
 }
 
 const CHAT_MODELS = [

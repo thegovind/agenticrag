@@ -299,3 +299,8 @@ rag-financial-poc/
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+---
+
+**Built for Ashish Talati (Microsoft) - RAG Financial POC**  
+*Devin Session: https://app.devin.ai/sessions/00a44a41101e43aa823ad015cb1fdd70*

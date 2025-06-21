@@ -234,3 +234,59 @@ async def get_system_health():
     except Exception as e:
         logger.error(f"Error getting system health: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve system health")
+
+@router.get("/foundry/models")
+async def get_foundry_models():
+    """Get available models from Azure AI Foundry project"""
+    try:
+        observability.track_request("foundry_models")
+        
+        from app.services.azure_services import AzureServiceManager
+        azure_service = AzureServiceManager()
+        await azure_service.initialize()
+        
+        models = await azure_service.get_available_models()
+        return {
+            "models": models,
+            "count": len(models),
+            "retrieved_at": datetime.utcnow()
+        }
+    except Exception as e:
+        logger.error(f"Error getting foundry models: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve foundry models")
+
+@router.get("/foundry/connections")
+async def get_foundry_connections():
+    """Get project connections from Azure AI Foundry"""
+    try:
+        observability.track_request("foundry_connections")
+        
+        from app.services.azure_services import AzureServiceManager
+        azure_service = AzureServiceManager()
+        await azure_service.initialize()
+        
+        connections = await azure_service.get_project_connections()
+        return {
+            "connections": connections,
+            "count": len(connections),
+            "retrieved_at": datetime.utcnow()
+        }
+    except Exception as e:
+        logger.error(f"Error getting foundry connections: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve foundry connections")
+
+@router.get("/foundry/project-info")
+async def get_foundry_project_info():
+    """Get Azure AI Foundry project information"""
+    try:
+        observability.track_request("foundry_project_info")
+        
+        from app.services.azure_services import AzureServiceManager
+        azure_service = AzureServiceManager()
+        await azure_service.initialize()
+        
+        project_info = await azure_service.get_project_info()
+        return project_info
+    except Exception as e:
+        logger.error(f"Error getting foundry project info: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve foundry project info")

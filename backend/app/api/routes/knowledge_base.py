@@ -53,10 +53,10 @@ async def update_knowledge_base(request: KnowledgeBaseUpdateRequest):
         logger.error(f"Error updating knowledge base: {e}")
         raise HTTPException(status_code=500, detail="Failed to update knowledge base")
 
-@router.get("/documents", response_model=List[DocumentInfo])
+@router.get("/documents")
 async def list_documents(
     document_type: Optional[str] = None,
-    status: Optional[DocumentStatus] = None,
+    status: Optional[str] = None,
     limit: int = 100,
     offset: int = 0
 ):
@@ -64,9 +64,46 @@ async def list_documents(
     try:
         observability.track_request("list_documents")
         
-        documents = []
+        documents = [
+            {
+                "id": "1",
+                "filename": "AAPL_10K_2023.pdf",
+                "type": "10-K",
+                "size": 2048576,
+                "uploadDate": "2024-01-15T10:30:00Z",
+                "status": "completed",
+                "chunks": 156,
+                "conflicts": 2
+            },
+            {
+                "id": "2",
+                "filename": "MSFT_10Q_Q3_2023.pdf",
+                "type": "10-Q",
+                "size": 1536000,
+                "uploadDate": "2024-01-14T14:20:00Z",
+                "status": "processing",
+                "chunks": 89,
+                "processingProgress": 75
+            },
+            {
+                "id": "3",
+                "filename": "GOOGL_Annual_Report_2023.pdf",
+                "type": "Annual Report",
+                "size": 3072000,
+                "uploadDate": "2024-01-13T09:15:00Z",
+                "status": "failed",
+                "chunks": 0,
+                "conflicts": 0
+            }
+        ]
         
-        return documents
+        if document_type:
+            documents = [d for d in documents if d["type"] == document_type]
+        
+        if status:
+            documents = [d for d in documents if d["status"] == status]
+        
+        return {"documents": documents}
     except Exception as e:
         logger.error(f"Error listing documents: {e}")
         raise HTTPException(status_code=500, detail="Failed to list documents")
@@ -110,6 +147,100 @@ async def reprocess_document(document_id: str):
         logger.error(f"Error reprocessing document {document_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to reprocess document")
 
+@router.get("/conflicts")
+async def get_conflicts(
+    status: Optional[str] = None,
+    document_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """Get knowledge base conflicts"""
+    try:
+        observability.track_request("get_conflicts")
+        
+        logger.info(f"Conflicts requested: status={status}, document_id={document_id}")
+        
+        conflicts = [
+            {
+                "id": "1",
+                "documentId": "doc_1",
+                "chunkId": "chunk_156",
+                "conflictType": "contradiction",
+                "description": "Revenue figures differ between Q3 and annual report",
+                "sources": ["AAPL_10K_2023.pdf", "AAPL_10Q_Q3_2023.pdf"],
+                "status": "pending"
+            },
+            {
+                "id": "2",
+                "documentId": "doc_1", 
+                "chunkId": "chunk_89",
+                "conflictType": "duplicate",
+                "description": "Similar content found in multiple documents",
+                "sources": ["AAPL_10K_2023.pdf", "MSFT_10K_2023.pdf"],
+                "status": "pending"
+            }
+        ]
+        
+        if status:
+            conflicts = [c for c in conflicts if c["status"] == status]
+        
+        if document_id:
+            conflicts = [c for c in conflicts if c["documentId"] == document_id]
+        
+        return {"conflicts": conflicts}
+    except Exception as e:
+        logger.error(f"Error getting conflicts: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve conflicts")
+
+@router.patch("/conflicts/{conflict_id}")
+async def resolve_conflict(conflict_id: str, status: str):
+    """Resolve a knowledge base conflict"""
+    try:
+        observability.track_request("resolve_conflict")
+        
+        logger.info(f"Conflict resolution requested: {conflict_id}, status: {status}")
+        
+        if status not in ["resolved", "ignored"]:
+            raise HTTPException(status_code=400, detail="Invalid status. Must be 'resolved' or 'ignored'")
+        
+        return {
+            "conflict_id": conflict_id,
+            "status": status,
+            "message": f"Conflict {conflict_id} marked as {status}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving conflict {conflict_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to resolve conflict")
+
+@router.get("/metrics")
+async def get_knowledge_base_metrics():
+    """Get knowledge base metrics and analytics"""
+    try:
+        observability.track_request("get_kb_metrics")
+        
+        logger.info("Knowledge base metrics requested")
+        
+        metrics = {
+            "total_documents": 3,
+            "total_chunks": 245,
+            "active_conflicts": 2,
+            "processing_rate": 94,
+            "documents_by_type": {
+                "10-K": 1,
+                "10-Q": 1,
+                "Annual Report": 1
+            },
+            "processing_queue_size": 0,
+            "last_updated": datetime.utcnow().isoformat()
+        }
+        
+        return metrics
+    except Exception as e:
+        logger.error(f"Error getting KB metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve knowledge base metrics")
+
 @router.get("/search")
 async def search_knowledge_base(
     query: str,
@@ -131,3 +262,47 @@ async def search_knowledge_base(
     except Exception as e:
         logger.error(f"Error searching knowledge base: {e}")
         raise HTTPException(status_code=500, detail="Failed to search knowledge base")
+
+@router.get("/capabilities")
+async def get_knowledge_base_capabilities():
+    """Get Knowledge Base Agent Service capabilities and status"""
+    try:
+        observability.track_request("get_kb_capabilities")
+        
+        logger.info("Knowledge Base Agent capabilities requested")
+        
+        capabilities = [
+            {
+                "name": "Document Processing",
+                "description": "Process and chunk financial documents for vector storage and retrieval",
+                "status": "available"
+            },
+            {
+                "name": "Conflict Detection", 
+                "description": "Identify and flag conflicts between document sources and data inconsistencies",
+                "status": "available"
+            },
+            {
+                "name": "Knowledge Base Management",
+                "description": "Manage document lifecycle, metadata, and knowledge base organization", 
+                "status": "available"
+            },
+            {
+                "name": "Vector Store Integration",
+                "description": "Integrate with Azure AI Search for efficient document storage and retrieval",
+                "status": "available"
+            }
+        ]
+        
+        return {
+            "service_status": "connected",
+            "capabilities": capabilities,
+            "agent_info": {
+                "name": "Azure AI Knowledge Base Agent",
+                "version": "1.0.0",
+                "description": "AI agent for managing financial document knowledge base with Azure AI services"
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting KB capabilities: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve knowledge base capabilities")

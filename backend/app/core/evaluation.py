@@ -6,44 +6,33 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from enum import Enum
 
+from app.models.evaluation import EvaluationResult, FinancialEvaluationContext, EvaluationMetric
+from .azure_ai_foundry_evaluators import (
+    AzureAIFoundryEvaluator,
+    AzureAIFoundryAgentEvaluator,
+    AzureEvaluationConfig,
+    AzureEvaluatorType,
+    create_azure_ai_foundry_evaluator,
+    create_azure_ai_foundry_agent_evaluator
+)
+
 
 logger = logging.getLogger(__name__)
 
-class EvaluationMetric(Enum):
-    RELEVANCE = "relevance"
-    GROUNDEDNESS = "groundedness"
-    COHERENCE = "coherence"
-    FLUENCY = "fluency"
-    FINANCIAL_ACCURACY = "financial_accuracy"
-    CITATION_QUALITY = "citation_quality"
+class EvaluationFrameworkType(Enum):
+    CUSTOM = "custom"
+    AZURE_AI_FOUNDRY = "azure_ai_foundry"
+    HYBRID = "hybrid"
     RESPONSE_TIME = "response_time"
-
-@dataclass
-class EvaluationResult:
-    metric: str
-    score: float
-    reasoning: str
-    timestamp: datetime
-    session_id: str
-    query: str
-    response: str
-    sources: List[str]
-    model_used: str
-    metadata: Dict[str, Any] = None
-
-@dataclass
-class FinancialEvaluationContext:
-    query: str
-    response: str
-    sources: List[Dict[str, Any]]
-    ground_truth: Optional[str] = None
-    financial_context: Optional[Dict[str, Any]] = None
 
 class FinancialAccuracyEvaluator:
     """Custom evaluator for financial document accuracy"""
     
     def __init__(self, azure_openai_client):
+        from app.core.config import settings
         self.client = azure_openai_client
+        self.chunk_size = settings.MAX_CHUNK_SIZE
+        self.credibility_threshold = settings.CREDIBILITY_THRESHOLD
         self.financial_keywords = [
             "revenue", "profit", "loss", "earnings", "EBITDA", "cash flow",
             "assets", "liabilities", "equity", "debt", "margin", "growth",
@@ -72,13 +61,17 @@ class FinancialAccuracyEvaluator:
         - Correct use of financial terminology
         - Proper context and time periods
         - Alignment with source documents
+        - Source credibility scores (threshold: {self.credibility_threshold})
+        - Chunk-level consistency within {self.chunk_size} character segments
         
         Respond in JSON format:
         {{
             "score": <1-5>,
             "reasoning": "<detailed explanation>",
             "financial_errors": ["<list of any errors found>"],
-            "confidence": <0.0-1.0>
+            "confidence": <0.0-1.0>,
+            "source_credibility_check": "<assessment of source credibility alignment>",
+            "chunk_consistency": "<assessment of information consistency across chunks>"
         }}
         """
         
@@ -103,7 +96,11 @@ class FinancialAccuracyEvaluator:
                 model_used="gpt-4",
                 metadata={
                     "financial_errors": result.get("financial_errors", []),
-                    "confidence": result.get("confidence", 0.0)
+                    "confidence": result.get("confidence", 0.0),
+                    "source_credibility_check": result.get("source_credibility_check", ""),
+                    "chunk_consistency": result.get("chunk_consistency", ""),
+                    "chunk_size_used": self.chunk_size,
+                    "credibility_threshold": self.credibility_threshold
                 }
             )
             
@@ -125,7 +122,10 @@ class CitationQualityEvaluator:
     """Custom evaluator for citation quality and accuracy"""
     
     def __init__(self, azure_openai_client):
+        from app.core.config import settings
         self.client = azure_openai_client
+        self.chunk_size = settings.MAX_CHUNK_SIZE
+        self.credibility_threshold = settings.CREDIBILITY_THRESHOLD
     
     async def evaluate(self, context: FinancialEvaluationContext) -> EvaluationResult:
         """Evaluate citation quality and accuracy"""
@@ -208,9 +208,10 @@ class CitationQualityEvaluator:
 class EvaluationFramework:
     """Comprehensive evaluation framework for RAG system"""
     
-    def __init__(self, azure_openai_client, cosmos_client=None):
+    def __init__(self, azure_openai_client, cosmos_client=None, framework_type: EvaluationFrameworkType = EvaluationFrameworkType.CUSTOM, azure_config: Optional[AzureEvaluationConfig] = None):
         self.azure_client = azure_openai_client
         self.cosmos_client = cosmos_client
+        self.framework_type = framework_type
         
         self.relevance_evaluator = self._create_custom_relevance_evaluator(azure_openai_client)
         self.groundedness_evaluator = self._create_custom_groundedness_evaluator(azure_openai_client)
@@ -219,6 +220,16 @@ class EvaluationFramework:
         
         self.financial_accuracy_evaluator = FinancialAccuracyEvaluator(azure_openai_client)
         self.citation_quality_evaluator = CitationQualityEvaluator(azure_openai_client)
+        
+        self.azure_ai_foundry_evaluator = None
+        self.azure_ai_foundry_agent_evaluator = None
+        
+        if framework_type in [EvaluationFrameworkType.AZURE_AI_FOUNDRY, EvaluationFrameworkType.HYBRID]:
+            if azure_config:
+                self.azure_ai_foundry_evaluator = create_azure_ai_foundry_evaluator(azure_config)
+                self.azure_ai_foundry_agent_evaluator = create_azure_ai_foundry_agent_evaluator(azure_config)
+            else:
+                logger.warning("Azure AI Foundry framework requested but no config provided")
         
         self.evaluation_results = []
     
@@ -398,28 +409,42 @@ class EvaluationFramework:
         model_used: str,
         response_time: float,
         ground_truth: Optional[str] = None,
-        financial_context: Optional[Dict[str, Any]] = None
+        financial_context: Optional[Dict[str, Any]] = None,
+        agent_metadata: Optional[Dict[str, Any]] = None
     ) -> List[EvaluationResult]:
         """Comprehensive evaluation of a RAG response"""
         
-        results = []
         context = FinancialEvaluationContext(
             query=query,
             response=response,
             sources=sources,
-            ground_truth=ground_truth,
-            financial_context=financial_context or {"session_id": session_id}
+            document_types=[s.get("document_type", "financial") for s in sources],
+            financial_metrics=financial_context or {"session_id": session_id}
         )
+        
+        if self.framework_type == EvaluationFrameworkType.CUSTOM:
+            return await self._evaluate_with_custom_framework(context, session_id, model_used, response_time)
+        elif self.framework_type == EvaluationFrameworkType.AZURE_AI_FOUNDRY:
+            return await self._evaluate_with_azure_ai_foundry(context, session_id, model_used, response_time, agent_metadata)
+        elif self.framework_type == EvaluationFrameworkType.HYBRID:
+            return await self._evaluate_with_hybrid_framework(context, session_id, model_used, response_time, agent_metadata)
+        else:
+            logger.warning(f"Unknown framework type: {self.framework_type}, falling back to custom")
+            return await self._evaluate_with_custom_framework(context, session_id, model_used, response_time)
+    
+    async def _evaluate_with_custom_framework(self, context: FinancialEvaluationContext, session_id: str, model_used: str, response_time: float) -> List[EvaluationResult]:
+        """Evaluate using custom evaluators"""
+        results = []
         
         response_time_result = EvaluationResult(
             metric=EvaluationMetric.RESPONSE_TIME.value,
-            score=min(1.0, max(0.0, (5.0 - response_time) / 5.0)),  # Normalize: 0s=1.0, 5s+=0.0
+            score=min(1.0, max(0.0, (5.0 - response_time) / 5.0)),
             reasoning=f"Response generated in {response_time:.2f} seconds",
             timestamp=datetime.utcnow(),
             session_id=session_id,
-            query=query,
-            response=response,
-            sources=[s.get("source", "") for s in sources],
+            query=context.query,
+            response=context.response,
+            sources=[s.get("source", "") for s in context.sources],
             model_used=model_used,
             metadata={"response_time_seconds": response_time}
         )
@@ -439,12 +464,12 @@ class EvaluationFramework:
             
             for result in evaluation_results:
                 if isinstance(result, Exception):
-                    logger.error(f"Evaluation failed: {result}")
+                    logger.error(f"Custom evaluation failed: {result}")
                 else:
                     results.append(result)
                     
         except Exception as e:
-            logger.error(f"Batch evaluation failed: {e}")
+            logger.error(f"Custom batch evaluation failed: {e}")
         
         self.evaluation_results.extend(results)
         
@@ -452,6 +477,48 @@ class EvaluationFramework:
             await self._store_evaluation_results(results)
         
         return results
+    
+    async def _evaluate_with_azure_ai_foundry(self, context: FinancialEvaluationContext, session_id: str, model_used: str, response_time: float, agent_metadata: Optional[Dict[str, Any]] = None) -> List[EvaluationResult]:
+        """Evaluate using Azure AI Foundry evaluators"""
+        if not self.azure_ai_foundry_evaluator:
+            logger.error("Azure AI Foundry evaluator not initialized")
+            return []
+            
+        try:
+            rag_results = await self.azure_ai_foundry_evaluator.evaluate_response(
+                context, session_id, model_used
+            )
+            
+            agent_results = []
+            if self.azure_ai_foundry_agent_evaluator and agent_metadata:
+                agent_results = await self.azure_ai_foundry_agent_evaluator.evaluate_agent_response(
+                    context, session_id, model_used, agent_metadata
+                )
+            
+            all_results = rag_results + agent_results
+            self.evaluation_results.extend(all_results)
+            
+            if self.cosmos_client:
+                await self._store_evaluation_results(all_results)
+            
+            return all_results
+            
+        except Exception as e:
+            logger.error(f"Azure AI Foundry evaluation failed: {e}")
+            return []
+    
+    async def _evaluate_with_hybrid_framework(self, context: FinancialEvaluationContext, session_id: str, model_used: str, response_time: float, agent_metadata: Optional[Dict[str, Any]] = None) -> List[EvaluationResult]:
+        """Evaluate using both custom and Azure AI Foundry evaluators"""
+        custom_results = await self._evaluate_with_custom_framework(context, session_id, model_used, response_time)
+        
+        azure_results = []
+        if self.azure_ai_foundry_evaluator:
+            try:
+                azure_results = await self._evaluate_with_azure_ai_foundry(context, session_id, model_used, response_time, agent_metadata)
+            except Exception as e:
+                logger.error(f"Azure AI Foundry evaluation in hybrid mode failed: {e}")
+        
+        return custom_results + azure_results
     
     async def _evaluate_relevance(self, context: FinancialEvaluationContext, session_id: str, model_used: str) -> EvaluationResult:
         """Evaluate response relevance using Azure AI evaluator"""
@@ -626,8 +693,8 @@ def get_evaluation_framework() -> EvaluationFramework:
         raise RuntimeError("Evaluation framework not initialized. Call setup_evaluation_framework first.")
     return evaluation_framework
 
-def setup_evaluation_framework(azure_openai_client, cosmos_client=None) -> EvaluationFramework:
+def setup_evaluation_framework(azure_openai_client, cosmos_client=None, framework_type: EvaluationFrameworkType = EvaluationFrameworkType.CUSTOM, azure_config: Optional[AzureEvaluationConfig] = None) -> EvaluationFramework:
     """Setup the global evaluation framework"""
     global evaluation_framework
-    evaluation_framework = EvaluationFramework(azure_openai_client, cosmos_client)
+    evaluation_framework = EvaluationFramework(azure_openai_client, cosmos_client, framework_type, azure_config)
     return evaluation_framework

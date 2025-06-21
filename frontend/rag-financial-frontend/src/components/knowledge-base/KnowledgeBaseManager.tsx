@@ -7,122 +7,53 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Upload, FileText, CheckCircle, AlertCircle, Clock, Trash2, Eye, Download } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertCircle, Clock, Trash2, Eye, Download, RefreshCw } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import ChunkingVisualization from './ChunkingVisualization';
 import { ModelSettings } from '../shared/ModelConfiguration';
+import { apiService, DocumentInfo, ConflictInfo, KnowledgeBaseMetrics } from '@/services/api';
+import { KnowledgeBaseAgentServiceStatus } from './KnowledgeBaseAgentServiceStatus';
 
-interface Document {
-  id: string;
-  filename: string;
-  type: string;
-  size: number;
-  uploadDate: string;
-  status: 'processing' | 'completed' | 'failed' | 'pending';
-  chunks: number;
-  conflicts?: number;
-  processingProgress?: number;
-}
 
-interface ConflictItem {
-  id: string;
-  documentId: string;
-  chunkId: string;
-  conflictType: 'duplicate' | 'contradiction' | 'outdated';
-  description: string;
-  sources: string[];
-  status: 'pending' | 'resolved' | 'ignored';
-}
 
 interface KnowledgeBaseManagerProps {
   modelSettings: ModelSettings;
 }
 
 const KnowledgeBaseManager: React.FC<KnowledgeBaseManagerProps> = ({ modelSettings }) => {
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [conflicts, setConflicts] = useState<ConflictItem[]>([]);
+  const [documents, setDocuments] = useState<DocumentInfo[]>([]);
+  const [conflicts, setConflicts] = useState<ConflictInfo[]>([]);
+  const [metrics, setMetrics] = useState<KnowledgeBaseMetrics | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [isUploading, setIsUploading] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
   const [activeTab, setActiveTab] = useState('upload');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchDocuments();
-    fetchConflicts();
+    loadData();
   }, []);
 
-  const fetchDocuments = async () => {
+  const loadData = async () => {
+    setLoading(true);
+    setError(null);
+    
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/documents`);
-      if (response.ok) {
-        const data = await response.json();
-        setDocuments(data.documents || []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch documents:', error);
-      setDocuments([
-        {
-          id: '1',
-          filename: 'AAPL_10K_2023.pdf',
-          type: '10-K',
-          size: 2048576,
-          uploadDate: '2024-01-15T10:30:00Z',
-          status: 'completed',
-          chunks: 156,
-          conflicts: 2
-        },
-        {
-          id: '2',
-          filename: 'MSFT_10Q_Q3_2023.pdf',
-          type: '10-Q',
-          size: 1536000,
-          uploadDate: '2024-01-14T14:20:00Z',
-          status: 'processing',
-          chunks: 89,
-          processingProgress: 75
-        },
-        {
-          id: '3',
-          filename: 'GOOGL_Annual_Report_2023.pdf',
-          type: 'Annual Report',
-          size: 3072000,
-          uploadDate: '2024-01-13T09:15:00Z',
-          status: 'failed',
-          chunks: 0,
-          conflicts: 0
-        }
+      const [documentsResponse, conflictsResponse, metricsResponse] = await Promise.all([
+        apiService.listDocuments(),
+        apiService.getConflicts(),
+        apiService.getKnowledgeBaseMetrics()
       ]);
-    }
-  };
-
-  const fetchConflicts = async () => {
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/knowledge-base/conflicts`);
-      if (response.ok) {
-        const data = await response.json();
-        setConflicts(data.conflicts || []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch conflicts:', error);
-      setConflicts([
-        {
-          id: '1',
-          documentId: '1',
-          chunkId: 'chunk_156',
-          conflictType: 'contradiction',
-          description: 'Revenue figures differ between Q3 and annual report',
-          sources: ['AAPL_10K_2023.pdf', 'AAPL_10Q_Q3_2023.pdf'],
-          status: 'pending'
-        },
-        {
-          id: '2',
-          documentId: '1',
-          chunkId: 'chunk_89',
-          conflictType: 'duplicate',
-          description: 'Similar content found in multiple documents',
-          sources: ['AAPL_10K_2023.pdf', 'MSFT_10K_2023.pdf'],
-          status: 'pending'
-        }
-      ]);
+      
+      setDocuments(documentsResponse.documents);
+      setConflicts(conflictsResponse.conflicts);
+      setMetrics(metricsResponse);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load data');
+      console.error('Error loading data:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -131,76 +62,62 @@ const KnowledgeBaseManager: React.FC<KnowledgeBaseManagerProps> = ({ modelSettin
 
     setIsUploading(true);
     setUploadProgress(0);
-
-    const formData = new FormData();
-    Array.from(selectedFiles).forEach(file => {
-      formData.append('files', file);
-    });
+    setError(null);
 
     try {
-      const apiBaseUrl = (import.meta as any).env?.VITE_API_BASE_URL || '/api/v1';
-      const response = await fetch(`${apiBaseUrl}/documents/upload`, {
-        method: 'POST',
-        body: formData,
+      const filesArray = Array.from(selectedFiles);
+      
+      const uploadResponse = await apiService.uploadDocuments({
+        files: filesArray,
+        embedding_model: modelSettings.embeddingModel,
+        search_type: modelSettings.searchType,
+        temperature: modelSettings.temperature,
+        document_type: undefined,
+        company_name: undefined,
+        filing_date: undefined
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Upload successful:', data);
-        fetchDocuments();
-        setSelectedFiles(null);
-      } else {
-        console.error('Upload failed');
-      }
-    } catch (error) {
-      console.error('Upload error:', error);
+      console.log('Upload successful:', uploadResponse);
+      setSelectedFiles(null);
+      
       const interval = setInterval(() => {
         setUploadProgress(prev => {
           if (prev >= 100) {
             clearInterval(interval);
             setIsUploading(false);
-            fetchDocuments();
+            loadData(); // Refresh data after upload
             return 100;
           }
           return prev + 10;
         });
       }, 200);
-    }
 
-    setIsUploading(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+      console.error('Upload error:', err);
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
   };
 
   const handleDeleteDocument = async (documentId: string) => {
     try {
-      const apiBaseUrl = (import.meta as any).env?.VITE_API_BASE_URL || '/api/v1';
-      const response = await fetch(`${apiBaseUrl}/documents/${documentId}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        fetchDocuments();
-      }
-    } catch (error) {
-      console.error('Delete failed:', error);
+      await apiService.deleteDocument(documentId);
+      await loadData(); // Refresh data after deletion
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete document');
+      console.error('Delete failed:', err);
     }
   };
 
   const handleResolveConflict = async (conflictId: string, resolution: 'resolve' | 'ignore') => {
     try {
-      const apiBaseUrl = (import.meta as any).env?.VITE_API_BASE_URL || '/api/v1';
-      const response = await fetch(`${apiBaseUrl}/knowledge-base/conflicts/${conflictId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ status: resolution === 'resolve' ? 'resolved' : 'ignored' }),
-      });
-
-      if (response.ok) {
-        fetchConflicts();
-      }
-    } catch (error) {
-      console.error('Conflict resolution failed:', error);
+      const status = resolution === 'resolve' ? 'resolved' : 'ignored';
+      await apiService.resolveConflict(conflictId, status);
+      await loadData(); // Refresh data after conflict resolution
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resolve conflict');
+      console.error('Conflict resolution failed:', err);
     }
   };
 
@@ -258,7 +175,18 @@ const KnowledgeBaseManager: React.FC<KnowledgeBaseManagerProps> = ({ modelSettin
             Upload, process, and manage financial documents for RAG analysis
           </p>
         </div>
+        <Button onClick={loadData} variant="outline" disabled={loading}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
       </div>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-5">
@@ -468,16 +396,18 @@ const KnowledgeBaseManager: React.FC<KnowledgeBaseManagerProps> = ({ modelSettin
         </TabsContent>
 
         <TabsContent value="analytics" className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <Card>
+          <div className="space-y-4">
+            <KnowledgeBaseAgentServiceStatus onRefresh={loadData} />
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+              <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Total Documents</CardTitle>
                 <FileText className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{documents.length}</div>
+                <div className="text-2xl font-bold">{metrics?.total_documents || documents.length}</div>
                 <p className="text-xs text-muted-foreground">
-                  +2 from last week
+                  Total documents
                 </p>
               </CardContent>
             </Card>
@@ -488,7 +418,7 @@ const KnowledgeBaseManager: React.FC<KnowledgeBaseManagerProps> = ({ modelSettin
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {documents.reduce((sum, doc) => sum + doc.chunks, 0)}
+                  {metrics?.total_chunks || documents.reduce((sum, doc) => sum + (doc.chunks || 0), 0)}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Processed chunks
@@ -502,7 +432,7 @@ const KnowledgeBaseManager: React.FC<KnowledgeBaseManagerProps> = ({ modelSettin
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {conflicts.filter(c => c.status === 'pending').length}
+                  {metrics?.active_conflicts || conflicts.filter(c => c.status === 'pending').length}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Require attention
@@ -515,12 +445,13 @@ const KnowledgeBaseManager: React.FC<KnowledgeBaseManagerProps> = ({ modelSettin
                 <Clock className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">94%</div>
+                <div className="text-2xl font-bold">{metrics?.processing_rate || 94}%</div>
                 <p className="text-xs text-muted-foreground">
                   Success rate
                 </p>
               </CardContent>
             </Card>
+          </div>
           </div>
         </TabsContent>
       </Tabs>

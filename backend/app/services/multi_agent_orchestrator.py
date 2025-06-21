@@ -12,6 +12,7 @@ from semantic_kernel.contents import ChatHistory
 from app.services.azure_services import AzureServiceManager
 from app.services.knowledge_base_manager import AdaptiveKnowledgeBaseManager
 from app.services.document_processor import DocumentProcessor
+from app.services.azure_ai_agent_service import AzureAIAgentService, MockAzureAIAgentService
 from app.core.config import settings
 from app.core.observability import observability
 
@@ -244,8 +245,50 @@ class QAAgent(FinancialAgent):
     def __init__(self, azure_manager: AzureServiceManager, kb_manager: AdaptiveKnowledgeBaseManager):
         super().__init__(AgentType.QA_AGENT, azure_manager)
         self.kb_manager = kb_manager
+        self.azure_ai_agent_service = self._initialize_azure_ai_agent_service(azure_manager)
+        self.qa_agent_id = None
+        self.current_thread_id = None
         self._initialize_capabilities()
         
+    def _initialize_azure_ai_agent_service(self, azure_manager: AzureServiceManager) -> AzureAIAgentService:
+        """Initialize Azure AI Agent Service for MCP client functionality"""
+        try:
+            # Try to get project client from azure_manager
+            if hasattr(azure_manager, 'get_project_client'):
+                project_client = azure_manager.get_project_client()
+                if project_client:
+                    return AzureAIAgentService(project_client)
+            
+            logger.warning("Using mock Azure AI Agent Service - project client not available")
+            return MockAzureAIAgentService()
+            
+        except Exception as e:
+            logger.error(f"Error initializing Azure AI Agent Service: {e}")
+            return MockAzureAIAgentService()
+    
+    async def _ensure_qa_agent_initialized(self):
+        """Ensure QA agent is created and ready"""
+        if not self.qa_agent_id:
+            try:
+                agent = await self.azure_ai_agent_service.create_qa_agent(
+                    name="Financial QA Agent",
+                    instructions="You are a financial analysis expert specializing in comprehensive question answering with source verification.",
+                    model_deployment=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                )
+                self.qa_agent_id = agent.id
+                logger.info(f"Created QA agent: {self.qa_agent_id}")
+            except Exception as e:
+                logger.error(f"Error creating QA agent: {e}")
+                raise
+        
+        if not self.current_thread_id:
+            try:
+                self.current_thread_id = await self.azure_ai_agent_service.create_thread(self.qa_agent_id)
+                logger.info(f"Created thread: {self.current_thread_id}")
+            except Exception as e:
+                logger.error(f"Error creating thread: {e}")
+                raise
+    
     def _initialize_capabilities(self):
         """Initialize Q&A capabilities"""
         self.capabilities = [
@@ -307,104 +350,206 @@ class QAAgent(FinancialAgent):
             return {"error": str(e), "success": False}
     
     async def _answer_financial_question(self, request: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Answer financial questions with source verification"""
+        """Answer financial questions with source verification using Azure AI Agent Service"""
         question = request["question"]
         verification_level = request.get("verification_level", "thorough")
         
-        sub_questions = await self._decompose_question_internal(question)
-        
-        all_chunks = []
-        for sub_q in sub_questions:
-            chunks = await self.kb_manager.search_knowledge_base(
-                query=sub_q,
-                top_k=5,
-                filters={"document_type": ["10-K", "10-Q", "8-K"]}
-            )
-            all_chunks.extend(chunks)
-        
-        unique_chunks = {chunk['chunk_id']: chunk for chunk in all_chunks}.values()
-        sorted_chunks = sorted(unique_chunks, key=lambda x: x.get('score', 0), reverse=True)[:10]
-        
-        verification_details = await self._verify_sources_internal(sorted_chunks)
-        
-        knowledge_context = "\n\n".join([
-            f"Source: {chunk['metadata'].get('source', 'Unknown')} (Credibility: {verification_details.get(chunk['chunk_id'], {}).get('score', 0.5):.2f})\n{chunk['content']}"
-            for chunk in sorted_chunks
-        ])
-        
-        answer_prompt = f"""
-        You are a financial analysis expert. Answer the following question comprehensively using the provided knowledge base.
-        
-        Question: {question}
-        
-        Sub-questions to address:
-        {chr(10).join([f"- {sq}" for sq in sub_questions])}
-        
-        Knowledge Base Context:
-        {knowledge_context}
-        
-        Guidelines:
-        - Provide a comprehensive, accurate answer
-        - Address all aspects of the question
-        - Include specific financial data and metrics
-        - Explain your reasoning process
-        - Acknowledge any limitations or uncertainties
-        - Cite sources appropriately
-        """
-        
-        # Generate comprehensive answer
         try:
-            response = f"Financial analysis answer for: {question[:100]}..."
-        except Exception as e:
-            logger.error(f"Error generating answer: {e}")
-            response = "Error generating answer"
-        
-        answer = str(response)
-        
-        confidence = self._calculate_answer_confidence(sorted_chunks, verification_details)
-        
-        return {
-            "answer": answer,
-            "sources": [
-                {
-                    "source": chunk['metadata'].get('source', 'Unknown'),
-                    "document_type": chunk['metadata'].get('document_type', 'Unknown'),
-                    "section": chunk['metadata'].get('section_title', 'Unknown'),
-                    "relevance_score": chunk.get('score', 0.0),
-                    "credibility_score": verification_details.get(chunk['chunk_id'], {}).get('score', 0.5)
+            with observability.trace_operation("qa_agent_answer_question") as span:
+                span.set_attribute("question", question[:100])
+                span.set_attribute("verification_level", verification_level)
+                
+                await self._ensure_qa_agent_initialized()
+                
+                sub_questions = await self._decompose_question_internal(question)
+                
+                # Search knowledge base for relevant information
+                all_chunks = []
+                for sub_q in sub_questions:
+                    chunks = await self.kb_manager.search_knowledge_base(
+                        query=sub_q,
+                        top_k=5,
+                        filters={"document_type": ["10-K", "10-Q", "8-K"]}
+                    )
+                    all_chunks.extend(chunks)
+                
+                unique_chunks = {chunk['chunk_id']: chunk for chunk in all_chunks}.values()
+                sorted_chunks = sorted(unique_chunks, key=lambda x: x.get('score', 0), reverse=True)[:10]
+                
+                verification_details = await self._verify_sources_internal(sorted_chunks)
+                
+                knowledge_context = "\n\n".join([
+                    f"Source: {chunk['metadata'].get('source', 'Unknown')} (Credibility: {verification_details.get(chunk['chunk_id'], {}).get('score', 0.5):.2f})\n{chunk['content']}"
+                    for chunk in sorted_chunks
+                ])
+                
+                # Use Azure AI Agent Service to generate comprehensive answer
+                agent_context = {
+                    "knowledge_context": knowledge_context,
+                    "sub_questions": sub_questions,
+                    "verification_level": verification_level,
+                    "document_types": list(set([chunk['metadata'].get('document_type', 'Unknown') for chunk in sorted_chunks]))
                 }
-                for chunk in sorted_chunks
-            ],
-            "confidence": confidence,
-            "verification_details": verification_details,
-            "sub_questions_addressed": sub_questions,
-            "success": True
-        }
+                
+                # Run agent conversation to get comprehensive answer
+                agent_result = await self.azure_ai_agent_service.run_agent_conversation(
+                    agent_id=self.qa_agent_id,
+                    thread_id=self.current_thread_id,
+                    message=question,
+                    context=agent_context
+                )
+                
+                answer = agent_result.response
+                confidence = self._calculate_answer_confidence(sorted_chunks, verification_details)
+                
+                combined_sources = []
+                for chunk in sorted_chunks:
+                    combined_sources.append({
+                        "source": chunk['metadata'].get('source', 'Unknown'),
+                        "document_type": chunk['metadata'].get('document_type', 'Unknown'),
+                        "section": chunk['metadata'].get('section_title', 'Unknown'),
+                        "relevance_score": chunk.get('score', 0.0),
+                        "credibility_score": verification_details.get(chunk['chunk_id'], {}).get('score', 0.5)
+                    })
+                
+                for agent_source in agent_result.sources:
+                    combined_sources.append({
+                        "source": agent_source.get("file_id", "Azure AI Agent"),
+                        "document_type": "Agent Citation",
+                        "section": agent_source.get("quote", "")[:100],
+                        "relevance_score": 1.0,
+                        "credibility_score": 0.9
+                    })
+                
+                span.set_attribute("answer_length", len(answer))
+                span.set_attribute("sources_count", len(combined_sources))
+                span.set_attribute("confidence", confidence)
+                span.set_attribute("success", True)
+                
+                return {
+                    "answer": answer,
+                    "sources": combined_sources,
+                    "confidence": confidence,
+                    "verification_details": verification_details,
+                    "sub_questions_addressed": sub_questions,
+                    "agent_metadata": {
+                        "agent_id": self.qa_agent_id,
+                        "thread_id": self.current_thread_id,
+                        "run_id": agent_result.run_id
+                    },
+                    "success": True
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in QA agent answer generation: {e}")
+            observability.record_error("qa_agent_answer_error", str(e))
+            return {
+                "error": str(e),
+                "success": False,
+                "fallback_answer": f"I encountered an error while processing your question: {question}. Please try again or rephrase your question."
+            }
     
     async def _decompose_complex_question(self, request: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Decompose complex questions into sub-questions"""
+        """Decompose complex questions into sub-questions using Azure AI Agent Service"""
         question = request["question"]
         
-        sub_questions = await self._decompose_question_internal(question)
-        
-        strategy_prompt = f"""
-        Given the question: "{question}"
-        And the sub-questions: {sub_questions}
-        
-        Describe the optimal research strategy to answer this question comprehensively.
-        """
-        
         try:
-            strategy_response = f"Research strategy for: {question[:100]}..."
+            with observability.trace_operation("qa_agent_decompose_question") as span:
+                span.set_attribute("question", question[:100])
+                
+                await self._ensure_qa_agent_initialized()
+                
+                # Use Azure AI Agent Service for question decomposition
+                decomposition_context = {
+                    "task": "question_decomposition",
+                    "instructions": "Break down this complex financial question into 3-5 specific, researchable sub-questions that can be answered with financial data and documents."
+                }
+                
+                decomposition_message = f"""
+                Please decompose this complex financial question into specific sub-questions:
+                
+                Question: {question}
+                
+                Requirements:
+                - Generate 3-5 focused sub-questions
+                - Each sub-question should be answerable with financial documents
+                - Sub-questions should collectively address the main question
+                - Focus on quantitative and qualitative aspects
+                """
+                
+                # Run agent conversation for question decomposition
+                agent_result = await self.azure_ai_agent_service.run_agent_conversation(
+                    agent_id=self.qa_agent_id,
+                    thread_id=self.current_thread_id,
+                    message=decomposition_message,
+                    context=decomposition_context
+                )
+                
+                sub_questions_text = agent_result.response
+                
+                sub_questions = []
+                for line in sub_questions_text.split('\n'):
+                    line = line.strip()
+                    if line and (line.startswith('-') or line.startswith('•') or line[0].isdigit()):
+                        clean_question = line.lstrip('-•0123456789. ').strip()
+                        if clean_question and '?' in clean_question:
+                            sub_questions.append(clean_question)
+                
+                if not sub_questions:
+                    sub_questions = await self._decompose_question_internal(question)
+                
+                strategy_message = f"""
+                Given the main question: "{question}"
+                And these sub-questions: {sub_questions}
+                
+                Describe the optimal research strategy to answer this question comprehensively, including:
+                - Document types to prioritize (10-K, 10-Q, 8-K, etc.)
+                - Key financial metrics to analyze
+                - Verification approaches for sources
+                - Analysis methodology
+                """
+                
+                strategy_context = {
+                    "task": "research_strategy",
+                    "sub_questions": sub_questions
+                }
+                
+                strategy_result = await self.azure_ai_agent_service.run_agent_conversation(
+                    agent_id=self.qa_agent_id,
+                    thread_id=self.current_thread_id,
+                    message=strategy_message,
+                    context=strategy_context
+                )
+                
+                strategy_response = strategy_result.response
+                
+                span.set_attribute("sub_questions_count", len(sub_questions))
+                span.set_attribute("strategy_length", len(strategy_response))
+                span.set_attribute("success", True)
+                
+                return {
+                    "sub_questions": sub_questions,
+                    "research_strategy": strategy_response,
+                    "agent_metadata": {
+                        "agent_id": self.qa_agent_id,
+                        "thread_id": self.current_thread_id,
+                        "decomposition_run_id": agent_result.run_id,
+                        "strategy_run_id": strategy_result.run_id
+                    },
+                    "success": True
+                }
+                
         except Exception as e:
-            logger.error(f"Error generating strategy: {e}")
-            strategy_response = "Standard financial research approach"
-        
-        return {
-            "sub_questions": sub_questions,
-            "research_strategy": str(strategy_response),
-            "success": True
-        }
+            logger.error(f"Error in QA agent question decomposition: {e}")
+            observability.record_error("qa_agent_decompose_error", str(e))
+            
+            sub_questions = await self._decompose_question_internal(question)
+            return {
+                "sub_questions": sub_questions,
+                "research_strategy": "Standard financial research approach with document analysis and source verification",
+                "error": str(e),
+                "success": False
+            }
     
     async def _decompose_question_internal(self, question: str) -> List[str]:
         """Internal method to decompose questions"""
@@ -437,25 +582,117 @@ class QAAgent(FinancialAgent):
         return sub_questions[:5]  # Limit to 5 sub-questions
     
     async def _verify_source_credibility(self, request: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Verify source credibility"""
+        """Verify source credibility using Azure AI Agent Service"""
         sources = request["sources"]
         
-        verification_details = await self._verify_sources_internal(sources)
-        
-        credibility_scores = [
-            {
-                "source_id": source.get('chunk_id', 'unknown'),
-                "score": verification_details.get(source.get('chunk_id', 'unknown'), {}).get('score', 0.5),
-                "factors": verification_details.get(source.get('chunk_id', 'unknown'), {}).get('factors', [])
+        try:
+            with observability.trace_operation("qa_agent_verify_sources") as span:
+                span.set_attribute("sources_count", len(sources))
+                
+                await self._ensure_qa_agent_initialized()
+                
+                source_info = []
+                for i, source in enumerate(sources):
+                    source_info.append({
+                        "id": source.get("chunk_id", f"source_{i}"),
+                        "content": source.get("content", "")[:500],  # Limit content length
+                        "metadata": source.get("metadata", {}),
+                        "document_type": source.get("metadata", {}).get("document_type", "Unknown"),
+                        "source_name": source.get("metadata", {}).get("source", "Unknown")
+                    })
+                
+                verification_message = f"""
+                Please evaluate the credibility and trustworthiness of these financial document sources:
+                
+                Sources to verify:
+                {chr(10).join([f"Source {i+1}: {s['source_name']} ({s['document_type']})" for i, s in enumerate(source_info)])}
+                
+                For each source, consider:
+                - Document type credibility (SEC filings are highly credible)
+                - Source authority and reputation
+                - Recency and relevance of information
+                - Potential bias or conflicts of interest
+                - Verification against known standards
+                
+                Provide a credibility assessment and reasoning for each source.
+                """
+                
+                verification_context = {
+                    "task": "source_verification",
+                    "sources": source_info,
+                    "verification_criteria": ["authority", "recency", "bias", "accuracy", "relevance"]
+                }
+                
+                # Run agent conversation for source verification
+                agent_result = await self.azure_ai_agent_service.run_agent_conversation(
+                    agent_id=self.qa_agent_id,
+                    thread_id=self.current_thread_id,
+                    message=verification_message,
+                    context=verification_context
+                )
+                
+                verification_response = agent_result.response
+                
+                internal_verification = await self._verify_sources_internal(sources)
+                
+                credibility_scores = []
+                for i, source in enumerate(sources):
+                    source_id = source.get("chunk_id", f"source_{i}")
+                    
+                    internal_data = internal_verification.get(source_id, {})
+                    internal_score = internal_data.get("score", 0.5)
+                    internal_factors = internal_data.get("factors", [])
+                    
+                    credibility_scores.append({
+                        "source_id": source_id,
+                        "score": internal_score,
+                        "factors": internal_factors + ["Azure AI Agent Analysis"],
+                        "agent_analysis": verification_response[:200] + "..." if len(verification_response) > 200 else verification_response,
+                        "verification_method": "hybrid_agent_internal"
+                    })
+                
+                # Generate comprehensive verification report
+                verification_report = internal_verification.copy()
+                verification_report["agent_summary"] = verification_response
+                verification_report["verification_method"] = "Azure AI Agent Service + Internal Analysis"
+                verification_report["total_sources_analyzed"] = len(sources)
+                
+                span.set_attribute("verification_completed", True)
+                span.set_attribute("agent_analysis_length", len(verification_response))
+                span.set_attribute("success", True)
+                
+                return {
+                    "credibility_scores": credibility_scores,
+                    "verification_report": verification_report,
+                    "agent_metadata": {
+                        "agent_id": self.qa_agent_id,
+                        "thread_id": self.current_thread_id,
+                        "run_id": agent_result.run_id
+                    },
+                    "success": True
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in QA agent source verification: {e}")
+            observability.record_error("qa_agent_verify_error", str(e))
+            
+            verification_details = await self._verify_sources_internal(sources)
+            credibility_scores = [
+                {
+                    "source_id": source.get('chunk_id', 'unknown'),
+                    "score": verification_details.get(source.get('chunk_id', 'unknown'), {}).get('score', 0.5),
+                    "factors": verification_details.get(source.get('chunk_id', 'unknown'), {}).get('factors', []),
+                    "verification_method": "internal_fallback"
+                }
+                for source in sources
+            ]
+            
+            return {
+                "credibility_scores": credibility_scores,
+                "verification_report": verification_details,
+                "error": str(e),
+                "success": False
             }
-            for source in sources
-        ]
-        
-        return {
-            "credibility_scores": credibility_scores,
-            "verification_report": verification_details,
-            "success": True
-        }
     
     async def _verify_sources_internal(self, chunks: List[Dict]) -> Dict[str, Any]:
         """Internal method to verify source credibility"""
@@ -519,7 +756,49 @@ class KnowledgeManagerAgent(FinancialAgent):
     def __init__(self, azure_manager: AzureServiceManager, kb_manager: AdaptiveKnowledgeBaseManager):
         super().__init__(AgentType.KNOWLEDGE_MANAGER, azure_manager)
         self.kb_manager = kb_manager
+        self.azure_ai_agent_service = self._initialize_azure_ai_agent_service(azure_manager)
+        self.kb_agent_id = None
+        self.current_thread_id = None
         self._initialize_capabilities()
+        
+    def _initialize_azure_ai_agent_service(self, azure_manager: AzureServiceManager) -> AzureAIAgentService:
+        """Initialize Azure AI Agent Service for MCP client functionality"""
+        try:
+            # Try to get project client from azure_manager
+            if hasattr(azure_manager, 'get_project_client'):
+                project_client = azure_manager.get_project_client()
+                if project_client:
+                    return AzureAIAgentService(project_client)
+            
+            logger.warning("Using mock Azure AI Agent Service - project client not available")
+            return MockAzureAIAgentService()
+            
+        except Exception as e:
+            logger.error(f"Error initializing Azure AI Agent Service: {e}")
+            return MockAzureAIAgentService()
+    
+    async def _ensure_kb_agent_initialized(self):
+        """Ensure Knowledge Base agent is created and ready"""
+        if not self.kb_agent_id:
+            try:
+                agent = await self.azure_ai_agent_service.create_knowledge_agent(
+                    name="Financial Knowledge Base Agent",
+                    instructions="You are a financial knowledge base management expert specializing in document processing, conflict resolution, and knowledge base health assessment.",
+                    model_deployment=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                )
+                self.kb_agent_id = agent.id
+                logger.info(f"Created Knowledge Base agent: {self.kb_agent_id}")
+            except Exception as e:
+                logger.error(f"Error creating Knowledge Base agent: {e}")
+                raise
+        
+        if not self.current_thread_id:
+            try:
+                self.current_thread_id = await self.azure_ai_agent_service.create_thread(self.kb_agent_id)
+                logger.info(f"Created thread: {self.current_thread_id}")
+            except Exception as e:
+                logger.error(f"Error creating thread: {e}")
+                raise
         
     def _initialize_capabilities(self):
         """Initialize knowledge management capabilities"""
@@ -815,6 +1094,17 @@ class MultiAgentOrchestrator:
         
         return capabilities
     
+    async def _get_azure_ai_agent_service(self) -> AzureAIAgentService:
+        """Get Azure AI Agent Service from QA Agent"""
+        qa_agent = self.agents.get(AgentType.QA_AGENT)
+        if not qa_agent:
+            raise ValueError("QA Agent not initialized")
+        
+        if not hasattr(qa_agent, 'azure_ai_agent_service') or qa_agent.azure_ai_agent_service is None:
+            await qa_agent._ensure_qa_agent_initialized()
+        
+        return qa_agent.azure_ai_agent_service
+
     async def get_system_status(self) -> Dict[str, Any]:
         """Get overall system status"""
         return {

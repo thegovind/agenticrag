@@ -6,6 +6,7 @@ import { MessageInput } from './MessageInput';
 import { CitationPanel } from './CitationPanel';
 import { SessionHistory } from './SessionHistory';
 import { ModelSettings } from '../shared/ModelConfiguration';
+import { ChatAgentServiceStatus } from './ChatAgentServiceStatus';
 
 export interface Message {
   id: string;
@@ -262,22 +263,25 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ modelSettings }) =
           <>
             <ResizableHandle />
             <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
-              {showCitationPanel && (
-                <CitationPanel
-                  citations={selectedCitations}
-                  onClose={() => setShowCitationPanel(false)}
-                />
-              )}
-              {showSessionHistory && (
-                <SessionHistory
-                  sessions={sessions}
-                  currentSessionId={currentSessionId}
-                  onSessionSelect={handleSessionSelect}
-                  onNewSession={handleNewSession}
-                  onDeleteSession={handleDeleteSession}
-                  onClose={() => setShowSessionHistory(false)}
-                />
-              )}
+              <div className="flex flex-col h-full space-y-4 p-4">
+                <ChatAgentServiceStatus />
+                {showCitationPanel && (
+                  <CitationPanel
+                    citations={selectedCitations}
+                    onClose={() => setShowCitationPanel(false)}
+                  />
+                )}
+                {showSessionHistory && (
+                  <SessionHistory
+                    sessions={sessions}
+                    currentSessionId={currentSessionId}
+                    onSessionSelect={handleSessionSelect}
+                    onNewSession={handleNewSession}
+                    onDeleteSession={handleDeleteSession}
+                    onClose={() => setShowSessionHistory(false)}
+                  />
+                )}
+              </div>
             </ResizablePanel>
           </>
         )}

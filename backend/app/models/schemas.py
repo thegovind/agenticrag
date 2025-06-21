@@ -30,13 +30,21 @@ class DocumentStatus(str, Enum):
     FAILED = "failed"
 
 class Citation(BaseModel):
+    id: str = Field(default_factory=lambda: str(__import__('uuid').uuid4()))
+    content: str = Field(..., description="Content of the citation")
+    source: str = Field(..., description="Source name or title")
     document_id: str
-    document_name: str
+    document_title: str = Field(..., description="Title of the source document")
     page_number: Optional[int] = None
-    section: Optional[str] = None
-    confidence_score: float = Field(ge=0.0, le=1.0)
-    text_snippet: str
+    section_title: Optional[str] = None
+    confidence: str = Field(default="medium", description="Confidence level: low, medium, high")
     url: Optional[str] = None
+    credibility_score: Optional[float] = Field(default=0.5, ge=0.0, le=1.0, description="Source credibility score")
+    
+    document_name: Optional[str] = None
+    section: Optional[str] = None
+    confidence_score: Optional[float] = Field(default=0.5, ge=0.0, le=1.0)
+    text_snippet: Optional[str] = None
 
 class ChatMessage(BaseModel):
     role: str = Field(..., description="Role of the message sender (user, assistant, system)")
@@ -123,4 +131,71 @@ class SessionInfo(BaseModel):
     last_activity: datetime
     message_count: int
     total_tokens: int
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class VerificationLevel(str, Enum):
+    BASIC = "basic"
+    THOROUGH = "thorough"
+    COMPREHENSIVE = "comprehensive"
+
+class QARequest(BaseModel):
+    question: str = Field(..., description="The financial question to answer")
+    session_id: Optional[str] = None
+    chat_model: ChatModel = ChatModel.GPT_4
+    embedding_model: EmbeddingModel = EmbeddingModel.SMALL_3
+    temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    verification_level: VerificationLevel = VerificationLevel.THOROUGH
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional context for the question")
+    max_tokens: int = Field(default=4000, ge=1, le=8000)
+
+class QAResponse(BaseModel):
+    answer: str = Field(..., description="The comprehensive answer to the question")
+    session_id: str
+    confidence_score: float = Field(ge=0.0, le=1.0, description="Overall confidence in the answer")
+    citations: List[Citation] = Field(default_factory=list)
+    sub_questions: List[str] = Field(default_factory=list, description="Sub-questions that were researched")
+    verification_details: Dict[str, Any] = Field(default_factory=dict, description="Source verification details")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    token_usage: Dict[str, int] = Field(default_factory=dict)
+
+class QuestionDecompositionRequest(BaseModel):
+    question: str = Field(..., description="The complex question to decompose")
+    chat_model: ChatModel = ChatModel.GPT_4
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+class QuestionDecompositionResponse(BaseModel):
+    original_question: str
+    sub_questions: List[str] = Field(..., description="List of researchable sub-questions")
+    reasoning: str = Field(..., description="Explanation of how the question was decomposed")
+    session_id: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class SourceInfo(BaseModel):
+    id: str = Field(default_factory=lambda: str(__import__('uuid').uuid4()))
+    url: str = Field(..., description="URL of the source")
+    title: str = Field(..., description="Title of the source")
+    content: str = Field(..., description="Content excerpt from the source")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class VerifiedSource(BaseModel):
+    source_id: str
+    url: str
+    title: str
+    content: str
+    credibility_score: float = Field(ge=0.0, le=1.0)
+    credibility_explanation: str = Field(..., description="Explanation of credibility assessment")
+    trust_indicators: List[str] = Field(default_factory=list)
+    red_flags: List[str] = Field(default_factory=list)
+    verification_status: str = Field(..., description="verified, questionable, or unverified")
+
+class SourceVerificationRequest(BaseModel):
+    sources: List[SourceInfo] = Field(..., description="List of sources to verify")
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+class SourceVerificationResponse(BaseModel):
+    verified_sources: List[VerifiedSource] = Field(..., description="List of verified sources with credibility scores")
+    overall_credibility_score: float = Field(ge=0.0, le=1.0, description="Average credibility across all sources")
+    verification_summary: str = Field(..., description="Summary of verification results")
+    session_id: str
     metadata: Dict[str, Any] = Field(default_factory=dict)

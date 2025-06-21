@@ -9,10 +9,14 @@ class Settings(BaseSettings):
     
     AZURE_SEARCH_SERVICE_NAME: str = os.getenv("AZURE_SEARCH_SERVICE_NAME", "")
     AZURE_SEARCH_INDEX_NAME: str = os.getenv("AZURE_SEARCH_INDEX_NAME", "financial-documents")
+    azure_search_api_version: str = os.getenv("AZURE_SEARCH_API_VERSION", "2023-11-01")
     
     AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     AZURE_OPENAI_API_KEY: str = os.getenv("AZURE_OPENAI_API_KEY", "")
     AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+    azure_openai_chat_deployment_name: str = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME", "gpt-4")
+    azure_openai_embedding_deployment_name: str = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME", "text-embedding-ada-002")
+    azure_openai_deployment_name: str = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4")
     
     AVAILABLE_EMBEDDING_MODELS: List[str] = [
         "text-embedding-ada-002",
@@ -31,12 +35,55 @@ class Settings(BaseSettings):
     COSMOS_DB_ENDPOINT: str = os.getenv("COSMOS_DB_ENDPOINT", "")
     COSMOS_DB_DATABASE_NAME: str = os.getenv("COSMOS_DB_DATABASE_NAME", "rag-financial")
     COSMOS_DB_CONTAINER_NAME: str = os.getenv("COSMOS_DB_CONTAINER_NAME", "sessions")
+    azure_cosmos_endpoint: str = os.getenv("AZURE_COSMOS_ENDPOINT", "")
+    azure_cosmos_database_name: str = os.getenv("AZURE_COSMOS_DATABASE_NAME", "rag-financial-db")
+    azure_cosmos_container_name: str = os.getenv("AZURE_COSMOS_CONTAINER_NAME", "chat-sessions")
+    azure_cosmos_evaluation_container_name: str = os.getenv("AZURE_COSMOS_EVALUATION_CONTAINER_NAME", "evaluation-results")
     
     AZURE_FORM_RECOGNIZER_ENDPOINT: str = os.getenv("AZURE_FORM_RECOGNIZER_ENDPOINT", "")
+    azure_document_intelligence_endpoint: str = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", "")
     
-    AI_FOUNDRY_PROJECT_NAME: str = os.getenv("AI_FOUNDRY_PROJECT_NAME", "")
-    AI_FOUNDRY_RESOURCE_GROUP: str = os.getenv("AI_FOUNDRY_RESOURCE_GROUP", "")
-    AI_FOUNDRY_SUBSCRIPTION_ID: str = os.getenv("AI_FOUNDRY_SUBSCRIPTION_ID", "")
+    AZURE_AI_FOUNDRY_PROJECT_NAME: str = os.getenv("AZURE_AI_FOUNDRY_PROJECT_NAME", "")
+    AZURE_AI_FOUNDRY_RESOURCE_GROUP: str = os.getenv("AZURE_AI_FOUNDRY_RESOURCE_GROUP", "")
+    AZURE_SUBSCRIPTION_ID: str = os.getenv("AZURE_SUBSCRIPTION_ID", "")
+    AZURE_AI_FOUNDRY_WORKSPACE_NAME: str = os.getenv("AZURE_AI_FOUNDRY_WORKSPACE_NAME", "")
+    AZURE_AI_PROJECT_ENDPOINT: str = os.getenv("AZURE_AI_PROJECT_ENDPOINT", "")
+    azure_monitor_connection_string: str = os.getenv("AZURE_MONITOR_CONNECTION_STRING", "")
+    azure_key_vault_url: str = os.getenv("AZURE_KEY_VAULT_URL", "")
+    
+    mcp_enabled: bool = os.getenv("MCP_ENABLED", "true").lower() == "true"
+    mcp_server_port: int = int(os.getenv("MCP_SERVER_PORT", "3001"))
+    a2a_enabled: bool = os.getenv("A2A_ENABLED", "true").lower() == "true"
+    a2a_discovery_endpoint: str = os.getenv("A2A_DISCOVERY_ENDPOINT", "https://your-a2a-discovery.azure.com/")
+    
+    max_document_size_mb: int = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "50"))
+    supported_document_types: str = os.getenv("SUPPORTED_DOCUMENT_TYPES", "pdf,docx,xlsx,txt")
+    chunk_size: int = int(os.getenv("CHUNK_SIZE", "1000"))
+    max_chunks_per_document: int = int(os.getenv("MAX_CHUNKS_PER_DOCUMENT", "500"))
+    
+    evaluation_enabled: bool = os.getenv("EVALUATION_ENABLED", "true").lower() == "true"
+    evaluation_model: str = os.getenv("EVALUATION_MODEL", "gpt-4")
+    evaluation_temperature: float = float(os.getenv("EVALUATION_TEMPERATURE", "0.1"))
+    evaluation_max_tokens: int = int(os.getenv("EVALUATION_MAX_TOKENS", "500"))
+    
+    rate_limit_requests_per_minute: int = int(os.getenv("RATE_LIMIT_REQUESTS_PER_MINUTE", "100"))
+    rate_limit_tokens_per_minute: int = int(os.getenv("RATE_LIMIT_TOKENS_PER_MINUTE", "50000"))
+    
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    cache_ttl_seconds: int = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
+    
+    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "your-jwt-secret-key-here")
+    jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
+    jwt_expiration_hours: int = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
+    
+    mock_azure_services: bool = os.getenv("MOCK_AZURE_SERVICES", "false").lower() == "true"
+    enable_debug_logging: bool = os.getenv("ENABLE_DEBUG_LOGGING", "false").lower() == "true"
+    enable_performance_profiling: bool = os.getenv("ENABLE_PERFORMANCE_PROFILING", "false").lower() == "true"
+    environment: str = os.getenv("ENVIRONMENT", "development")
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    api_host: str = os.getenv("API_HOST", "0.0.0.0")
+    api_port: int = int(os.getenv("API_PORT", "8000"))
+    allowed_origins: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")
     
     MAX_CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200

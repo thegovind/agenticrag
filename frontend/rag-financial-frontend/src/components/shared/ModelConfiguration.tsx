@@ -1,5 +1,5 @@
-import React from 'react';
-import { ChevronDown, Settings, Brain, Search, Zap, Sun, Moon } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ChevronDown, Settings, Brain, Search, Zap, Sun, Moon, Loader2 } from 'lucide-react';
 
 export interface ModelSettings {
   selectedModel: string;
@@ -26,20 +26,79 @@ export const ModelConfiguration: React.FC<ModelConfigurationProps> = ({
   theme = 'light',
   onThemeChange,
 }) => {
-  const chatModels = [
+  const [chatModels, setChatModels] = useState([
     { id: 'gpt-4', name: 'GPT-4', provider: 'Azure OpenAI', description: 'Most capable model' },
     { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', provider: 'Azure OpenAI', description: 'Faster and more efficient' },
     { id: 'gpt-35-turbo', name: 'GPT-3.5 Turbo', provider: 'Azure OpenAI', description: 'Fast and cost-effective' },
     { id: 'financial-llm', name: 'Financial LLM', provider: 'Industry Specific', description: 'Specialized for finance' },
     { id: 'grok-beta', name: 'Grok Beta', provider: 'xAI', description: 'Advanced reasoning' },
     { id: 'deepseek-chat', name: 'DeepSeek Chat', provider: 'DeepSeek', description: 'High performance' },
-  ];
+  ]);
 
-  const embeddingModels = [
+  const [embeddingModels, setEmbeddingModels] = useState([
     { id: 'text-embedding-ada-002', name: 'Ada-002', dimensions: '1536d', provider: 'Azure OpenAI' },
     { id: 'text-embedding-3-small', name: 'Text-3-Small', dimensions: '1536d', provider: 'Azure OpenAI' },
     { id: 'text-embedding-3-large', name: 'Text-3-Large', dimensions: '3072d', provider: 'Azure OpenAI' },
-  ];
+  ]);
+
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelLoadError, setModelLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchFoundryModels();
+  }, []);
+
+  const fetchFoundryModels = async () => {
+    setIsLoadingModels(true);
+    setModelLoadError(null);
+    
+    try {
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+      const response = await fetch(`${apiBaseUrl}/admin/foundry/models`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      const foundryModels = data.models || [];
+      
+      const chatModelsList: Array<{id: string, name: string, provider: string, description: string}> = [];
+      const embeddingModelsList: Array<{id: string, name: string, dimensions: string, provider: string}> = [];
+      
+      foundryModels.forEach((model: any) => {
+        if (model.type === 'chat') {
+          chatModelsList.push({
+            id: model.name,
+            name: model.name,
+            provider: 'Azure AI Foundry',
+            description: `${model.version || 'Latest'} - ${model.status || 'Active'}`
+          });
+        } else if (model.type === 'embedding') {
+          embeddingModelsList.push({
+            id: model.name,
+            name: model.name,
+            dimensions: model.dimensions || 'Unknown',
+            provider: 'Azure AI Foundry'
+          });
+        }
+      });
+      
+      if (chatModelsList.length > 0) {
+        setChatModels(prev => [...prev, ...chatModelsList]);
+      }
+      
+      if (embeddingModelsList.length > 0) {
+        setEmbeddingModels(prev => [...prev, ...embeddingModelsList]);
+      }
+      
+    } catch (error) {
+      console.error('Error fetching foundry models:', error);
+      setModelLoadError(error instanceof Error ? error.message : 'Failed to load models');
+    } finally {
+      setIsLoadingModels(false);
+    }
+  };
 
   const searchTypes = [
     { id: 'hybrid', name: 'Hybrid Search', description: 'Vector + Keyword', icon: Zap },
@@ -55,7 +114,12 @@ export const ModelConfiguration: React.FC<ModelConfigurationProps> = ({
     <div className="bg-background border-b">
       <div className="p-4">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold">Model Configuration</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold">Model Configuration</h3>
+            {isLoadingModels && (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+          </div>
           <div className="flex items-center gap-2">
             {onThemeChange && (
               <button
@@ -78,6 +142,20 @@ export const ModelConfiguration: React.FC<ModelConfigurationProps> = ({
           </div>
         </div>
 
+        {modelLoadError && (
+          <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded-md dark:bg-destructive/20 dark:border-destructive/30">
+            <p className="text-sm text-destructive dark:text-red-400">
+              Failed to load Azure AI Foundry models: {modelLoadError}
+            </p>
+            <button
+              onClick={fetchFoundryModels}
+              className="mt-2 text-xs text-destructive hover:underline"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Chat Model */}
           <div className="space-y-2">
@@ -89,7 +167,7 @@ export const ModelConfiguration: React.FC<ModelConfigurationProps> = ({
               <select
                 value={settings.selectedModel}
                 onChange={(e) => onSettingsChange({ selectedModel: e.target.value })}
-                className="w-full p-2 border rounded-md bg-background appearance-none cursor-pointer"
+                className="w-full p-2 border border-input rounded-md bg-background text-foreground appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
               >
                 {chatModels.map((model) => (
                   <option key={model.id} value={model.id}>
@@ -114,7 +192,7 @@ export const ModelConfiguration: React.FC<ModelConfigurationProps> = ({
               <select
                 value={settings.embeddingModel}
                 onChange={(e) => onSettingsChange({ embeddingModel: e.target.value })}
-                className="w-full p-2 border rounded-md bg-background appearance-none cursor-pointer"
+                className="w-full p-2 border border-input rounded-md bg-background text-foreground appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
               >
                 {embeddingModels.map((model) => (
                   <option key={model.id} value={model.id}>
@@ -139,7 +217,7 @@ export const ModelConfiguration: React.FC<ModelConfigurationProps> = ({
               <select
                 value={settings.searchType}
                 onChange={(e) => onSettingsChange({ searchType: e.target.value })}
-                className="w-full p-2 border rounded-md bg-background appearance-none cursor-pointer"
+                className="w-full p-2 border border-input rounded-md bg-background text-foreground appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
               >
                 {searchTypes.map((type) => (
                   <option key={type.id} value={type.id}>
@@ -185,7 +263,7 @@ export const ModelConfiguration: React.FC<ModelConfigurationProps> = ({
                   step="100"
                   value={settings.maxTokens}
                   onChange={(e) => onSettingsChange({ maxTokens: parseInt(e.target.value) })}
-                  className="w-full p-2 border rounded-md bg-background"
+                  className="w-full p-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
                 />
               </div>
             </div>

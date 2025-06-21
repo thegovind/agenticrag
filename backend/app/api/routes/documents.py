@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Request
 from typing import List, Optional
 import logging
 import uuid
 from datetime import datetime
 import aiofiles
 import os
+import asyncio
 
 from app.models.schemas import (
     DocumentUploadRequest,
@@ -14,63 +15,148 @@ from app.models.schemas import (
     DocumentStatus
 )
 from app.core.observability import observability
+from app.services.document_processor import DocumentProcessor
+from app.services.azure_services import AzureServiceManager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.post("/upload", response_model=DocumentUploadResponse)
-async def upload_document(
-    file: UploadFile = File(...),
-    document_type: DocumentType = Form(...),
+@router.post("/upload", response_model=List[DocumentUploadResponse])
+async def upload_documents(
+    request: Request,
+    files: List[UploadFile] = File(...),
+    embedding_model: Optional[str] = Form("text-embedding-ada-002"),
+    search_type: Optional[str] = Form("hybrid"),
+    temperature: Optional[float] = Form(0.7),
+    document_type: Optional[DocumentType] = Form(None),
     company_name: Optional[str] = Form(None),
     filing_date: Optional[str] = Form(None)
 ):
-    """Upload a financial document for processing"""
+    """Upload multiple financial documents for processing with Azure Document Intelligence"""
     try:
-        document_id = str(uuid.uuid4())
-        observability.track_request("document_upload", document_id)
-        
+        responses = []
         allowed_extensions = {'.pdf', '.docx', '.doc', '.txt'}
-        file_extension = os.path.splitext(file.filename)[1].lower()
-        
-        if file_extension not in allowed_extensions:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"File type {file_extension} not supported. Allowed types: {allowed_extensions}"
-            )
-        
         upload_dir = "/tmp/uploads"
         os.makedirs(upload_dir, exist_ok=True)
         
-        file_path = os.path.join(upload_dir, f"{document_id}_{file.filename}")
-        async with aiofiles.open(file_path, 'wb') as f:
-            content = await file.read()
-            await f.write(content)
+        azure_manager = getattr(request.app.state, 'azure_manager', None)
+        if not azure_manager:
+            raise HTTPException(status_code=500, detail="Azure services not initialized")
         
-        parsed_filing_date = None
-        if filing_date:
+        document_processor = DocumentProcessor(azure_manager)
+        
+        for file in files:
+            document_id = str(uuid.uuid4())
+            observability.track_request("document_upload", document_id)
+            
+            file_extension = os.path.splitext(file.filename)[1].lower()
+            
+            if file_extension not in allowed_extensions:
+                responses.append(DocumentUploadResponse(
+                    document_id=document_id,
+                    status=DocumentStatus.FAILED,
+                    message=f"File type {file_extension} not supported. Allowed types: {allowed_extensions}",
+                    processing_started_at=datetime.utcnow()
+                ))
+                continue
+            
             try:
-                parsed_filing_date = datetime.fromisoformat(filing_date.replace('Z', '+00:00'))
-            except ValueError:
-                logger.warning(f"Invalid filing date format: {filing_date}")
+                file_content = await file.read()
+                file_path = os.path.join(upload_dir, f"{document_id}_{file.filename}")
+                
+                async with aiofiles.open(file_path, 'wb') as f:
+                    await f.write(file_content)
+                
+                parsed_filing_date = None
+                if filing_date:
+                    try:
+                        parsed_filing_date = datetime.fromisoformat(filing_date.replace('Z', '+00:00'))
+                    except ValueError:
+                        logger.warning(f"Invalid filing date format: {filing_date}")
+                
+                metadata = {
+                    "filename": file.filename,
+                    "document_type": document_type,
+                    "company_name": company_name,
+                    "filing_date": parsed_filing_date.isoformat() if parsed_filing_date else None,
+                    "embedding_model": embedding_model,
+                    "search_type": search_type,
+                    "temperature": temperature,
+                    "upload_timestamp": datetime.utcnow().isoformat(),
+                    "file_size": len(file_content),
+                    "file_extension": file_extension
+                }
+                
+                logger.info(f"Starting document processing: {document_id}, type: {document_type}, file: {file.filename}")
+                
+                content_type = file.content_type or "application/octet-stream"
+                
+                asyncio.create_task(
+                    process_document_async(
+                        document_processor, 
+                        file_content, 
+                        content_type, 
+                        file.filename, 
+                        document_id,
+                        metadata
+                    )
+                )
+                
+                response = DocumentUploadResponse(
+                    document_id=document_id,
+                    status=DocumentStatus.PROCESSING,
+                    message="Document uploaded successfully and processing started",
+                    processing_started_at=datetime.utcnow()
+                )
+                responses.append(response)
+                
+            except Exception as e:
+                logger.error(f"Error processing document {file.filename}: {e}")
+                responses.append(DocumentUploadResponse(
+                    document_id=document_id,
+                    status=DocumentStatus.FAILED,
+                    message=f"Failed to process document: {str(e)}",
+                    processing_started_at=datetime.utcnow()
+                ))
         
-        
-        logger.info(f"Document uploaded: {document_id}, type: {document_type}, file: {file.filename}")
-        
-        response = DocumentUploadResponse(
-            document_id=document_id,
-            status=DocumentStatus.PENDING,
-            message="Document uploaded successfully and queued for processing",
-            processing_started_at=datetime.utcnow()
-        )
-        
-        return response
+        return responses
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error uploading document: {e}")
-        raise HTTPException(status_code=500, detail="Failed to upload document")
+        logger.error(f"Error uploading documents: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload documents")
+
+async def process_document_async(
+    processor: DocumentProcessor,
+    content: bytes,
+    content_type: str,
+    filename: str,
+    document_id: str,
+    metadata: dict
+):
+    """Asynchronously process document with Azure Document Intelligence"""
+    try:
+        logger.info(f"Processing document {document_id} ({filename}) with Azure Document Intelligence")
+        
+        processed_doc = await processor.process_document(
+            content=content,
+            content_type=content_type,
+            source=filename,
+            metadata=metadata
+        )
+        
+        logger.info(f"Document {document_id} processed successfully: {processed_doc['processing_stats']}")
+        
+        observability.track_document_processing_complete(
+            document_id,
+            processed_doc['processing_stats']['total_chunks'],
+            processed_doc['processing_stats']['metrics_extracted']
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in async document processing for {document_id}: {e}")
+        observability.track_document_processing_error(document_id, str(e))
 
 @router.get("/", response_model=List[DocumentInfo])
 async def list_documents(

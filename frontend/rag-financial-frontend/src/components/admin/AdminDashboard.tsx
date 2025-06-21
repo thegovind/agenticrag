@@ -5,8 +5,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
-import { Activity, MessageSquare, DollarSign, AlertTriangle, CheckCircle, XCircle, TrendingUp, Database, Cpu, HardDrive } from 'lucide-react';
+import { Activity, MessageSquare, DollarSign, AlertTriangle, CheckCircle, XCircle, TrendingUp, Database, Cpu, HardDrive, Settings } from 'lucide-react';
 
 interface MetricData {
   timestamp: string;
@@ -51,11 +52,22 @@ export const AdminDashboard: React.FC = () => {
   const [systemMetrics, setSystemMetrics] = useState<MetricData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState<NodeJS.Timeout | null>(null);
+  const [evaluationFramework, setEvaluationFramework] = useState<'custom' | 'azure_ai_foundry' | 'hybrid'>('custom');
+  const [isUpdatingFramework, setIsUpdatingFramework] = useState(false);
+  const [foundryModels, setFoundryModels] = useState<any[]>([]);
+  const [foundryConnections, setFoundryConnections] = useState<any[]>([]);
+  const [foundryProjectInfo, setFoundryProjectInfo] = useState<any>(null);
+  const [isLoadingFoundryData, setIsLoadingFoundryData] = useState(false);
 
   useEffect(() => {
     fetchDashboardData();
+    fetchEvaluationFrameworkConfig();
+    fetchFoundryData();
     
-    const interval = setInterval(fetchDashboardData, 30000);
+    const interval = setInterval(() => {
+      fetchDashboardData();
+      fetchFoundryData();
+    }, 30000);
     setRefreshInterval(interval);
     
     return () => {
@@ -99,6 +111,73 @@ export const AdminDashboard: React.FC = () => {
       console.error('Error fetching dashboard data:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const fetchEvaluationFrameworkConfig = async () => {
+    try {
+      const response = await fetch('/api/admin/evaluation-framework-config');
+      if (response.ok) {
+        const config = await response.json();
+        setEvaluationFramework(config.framework_type || 'custom');
+      }
+    } catch (error) {
+      console.error('Error fetching evaluation framework config:', error);
+    }
+  };
+
+  const updateEvaluationFramework = async (framework: 'custom' | 'azure_ai_foundry' | 'hybrid') => {
+    try {
+      setIsUpdatingFramework(true);
+      const response = await fetch('/api/admin/evaluation-framework-config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ framework_type: framework }),
+      });
+
+      if (response.ok) {
+        setEvaluationFramework(framework);
+        fetchDashboardData();
+      } else {
+        console.error('Failed to update evaluation framework');
+      }
+    } catch (error) {
+      console.error('Error updating evaluation framework:', error);
+    } finally {
+      setIsUpdatingFramework(false);
+    }
+  };
+
+  const fetchFoundryData = async () => {
+    try {
+      setIsLoadingFoundryData(true);
+      
+      const [modelsResponse, connectionsResponse, projectResponse] = await Promise.all([
+        fetch('/api/v1/admin/foundry/models'),
+        fetch('/api/v1/admin/foundry/connections'),
+        fetch('/api/v1/admin/foundry/project-info')
+      ]);
+
+      if (modelsResponse.ok) {
+        const modelsData = await modelsResponse.json();
+        setFoundryModels(modelsData.models || []);
+      }
+
+      if (connectionsResponse.ok) {
+        const connectionsData = await connectionsResponse.json();
+        setFoundryConnections(connectionsData.connections || []);
+      }
+
+      if (projectResponse.ok) {
+        const projectData = await projectResponse.json();
+        setFoundryProjectInfo(projectData);
+      }
+    } catch (error) {
+      console.error('Error fetching foundry data:', error);
+    } finally {
+      setIsLoadingFoundryData(false);
     }
   };
 
@@ -202,6 +281,7 @@ export const AdminDashboard: React.FC = () => {
         <TabsList>
           <TabsTrigger value="token-usage">Token Usage</TabsTrigger>
           <TabsTrigger value="evaluation">Evaluation Metrics</TabsTrigger>
+          <TabsTrigger value="foundry">Azure AI Foundry</TabsTrigger>
           <TabsTrigger value="tracing">Distributed Tracing</TabsTrigger>
           <TabsTrigger value="system">System Metrics</TabsTrigger>
         </TabsList>
@@ -285,6 +365,71 @@ export const AdminDashboard: React.FC = () => {
         </TabsContent>
 
         <TabsContent value="evaluation" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Settings className="h-5 w-5" />
+                    Evaluation Framework Configuration
+                  </CardTitle>
+                  <CardDescription>
+                    Choose the evaluation framework for assessing RAG and agent performance
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={evaluationFramework}
+                    onValueChange={(value: 'custom' | 'azure_ai_foundry' | 'hybrid') => updateEvaluationFramework(value)}
+                    disabled={isUpdatingFramework}
+                  >
+                    <SelectTrigger className="w-48">
+                      <SelectValue placeholder="Select framework" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="custom">
+                        <div className="flex flex-col">
+                          <span className="font-medium">Custom Evaluators</span>
+                          <span className="text-xs text-muted-foreground">Built-in evaluation metrics</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="azure_ai_foundry">
+                        <div className="flex flex-col">
+                          <span className="font-medium">Azure AI Foundry</span>
+                          <span className="text-xs text-muted-foreground">RAG &amp; Agent evaluators</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="hybrid">
+                        <div className="flex flex-col">
+                          <span className="font-medium">Hybrid Approach</span>
+                          <span className="text-xs text-muted-foreground">Both custom and Azure AI Foundry</span>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {isUpdatingFramework && (
+                    <div className="text-sm text-muted-foreground">Updating...</div>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span>Current Framework:</span>
+                  <Badge variant={evaluationFramework === 'custom' ? 'default' : evaluationFramework === 'azure_ai_foundry' ? 'secondary' : 'outline'}>
+                    {evaluationFramework === 'custom' ? 'Custom' : evaluationFramework === 'azure_ai_foundry' ? 'Azure AI Foundry' : 'Hybrid'}
+                  </Badge>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {evaluationFramework === 'custom' && 'Using built-in evaluation metrics for relevance, groundedness, coherence, and financial accuracy.'}
+                  {evaluationFramework === 'azure_ai_foundry' && 'Using Azure AI Foundry RAG and Agent evaluators for comprehensive assessment.'}
+                  {evaluationFramework === 'hybrid' && 'Combining both custom and Azure AI Foundry evaluators for maximum coverage.'}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {evaluationMetrics.map((metric) => (
               <Card key={metric.id}>
@@ -319,6 +464,147 @@ export const AdminDashboard: React.FC = () => {
               </Card>
             ))}
           </div>
+        </TabsContent>
+
+        <TabsContent value="foundry" className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Available Models</CardTitle>
+                <Database className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{foundryModels.length}</div>
+                <p className="text-xs text-muted-foreground">
+                  {foundryModels.filter(m => m.type === 'chat').length} chat, {foundryModels.filter(m => m.type === 'embedding').length} embedding
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Project Connections</CardTitle>
+                <Activity className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{foundryConnections.length}</div>
+                <p className="text-xs text-muted-foreground">Active connections</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Project Status</CardTitle>
+                <CheckCircle className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">
+                  {foundryProjectInfo?.status || 'Active'}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {foundryProjectInfo?.name || 'RAG Financial Project'}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Available Models</CardTitle>
+                <CardDescription>Models deployed in Azure AI Foundry project</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-64">
+                  <div className="space-y-2">
+                    {isLoadingFoundryData ? (
+                      <div className="text-center text-muted-foreground">Loading models...</div>
+                    ) : foundryModels.length === 0 ? (
+                      <div className="text-center text-muted-foreground">No models found</div>
+                    ) : (
+                      foundryModels.map((model, index) => (
+                        <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
+                          <div className="space-y-1">
+                            <div className="font-medium">{model.name}</div>
+                            <div className="text-sm text-muted-foreground">
+                              Type: {model.type} • Version: {model.version || 'Latest'}
+                            </div>
+                          </div>
+                          <Badge variant={model.status === 'active' ? 'default' : 'secondary'}>
+                            {model.status || 'Active'}
+                          </Badge>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Project Connections</CardTitle>
+                <CardDescription>External service connections</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-64">
+                  <div className="space-y-2">
+                    {isLoadingFoundryData ? (
+                      <div className="text-center text-muted-foreground">Loading connections...</div>
+                    ) : foundryConnections.length === 0 ? (
+                      <div className="text-center text-muted-foreground">No connections found</div>
+                    ) : (
+                      foundryConnections.map((connection, index) => (
+                        <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
+                          <div className="space-y-1">
+                            <div className="font-medium">{connection.name}</div>
+                            <div className="text-sm text-muted-foreground">
+                              Type: {connection.type} • {connection.description || 'External service'}
+                            </div>
+                          </div>
+                          <div className={`flex items-center gap-1 ${getStatusColor(connection.status || 'success')}`}>
+                            {getStatusIcon(connection.status || 'success')}
+                            <Badge variant={connection.status === 'connected' ? 'default' : 'secondary'}>
+                              {connection.status || 'Connected'}
+                            </Badge>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          </div>
+
+          {foundryProjectInfo && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Project Information</CardTitle>
+                <CardDescription>Azure AI Foundry project details</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Project Name</div>
+                    <div className="text-sm text-muted-foreground">{foundryProjectInfo.name || 'N/A'}</div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Resource Group</div>
+                    <div className="text-sm text-muted-foreground">{foundryProjectInfo.resource_group || 'N/A'}</div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Location</div>
+                    <div className="text-sm text-muted-foreground">{foundryProjectInfo.location || 'N/A'}</div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Subscription</div>
+                    <div className="text-sm text-muted-foreground">{foundryProjectInfo.subscription_id || 'N/A'}</div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="tracing" className="space-y-4">

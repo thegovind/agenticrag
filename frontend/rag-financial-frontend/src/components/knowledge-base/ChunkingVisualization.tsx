@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
+
 import { 
   FileText, 
   Layers, 
@@ -58,7 +58,7 @@ const ChunkingVisualization: React.FC = () => {
   const [documentStructure, setDocumentStructure] = useState<DocumentStructure | null>(null);
   const [selectedChunk, setSelectedChunk] = useState<ChunkMetadata | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
-  const [chunkingStrategy, setChunkingStrategy] = useState<'hierarchical' | 'semantic' | 'hybrid'>('hierarchical');
+  const [chunkingStrategy] = useState<'hierarchical' | 'semantic' | 'hybrid'>('hierarchical');
 
   const mockDocuments = [
     { id: '1', name: 'AAPL_10K_2023.pdf' },

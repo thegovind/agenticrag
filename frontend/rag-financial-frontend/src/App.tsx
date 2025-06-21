@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { MessageSquare, BarChart3, Database } from 'lucide-react';
+import { MessageSquare, BarChart3, Database, HelpCircle } from 'lucide-react';
 import { ChatContainer } from '@/components/chat/ChatContainer';
 import { AdminDashboard } from '@/components/admin/AdminDashboard';
 import KnowledgeBaseManager from '@/components/knowledge-base/KnowledgeBaseManager';
+import { QAContainer } from '@/components/qa/QAContainer';
 import { ModelConfiguration, ModelSettings } from '@/components/shared/ModelConfiguration';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import './App.css';
@@ -37,11 +38,15 @@ const AppContent = () => {
           </div>
           
           <div className="ml-auto flex items-center space-x-4">
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-[600px]">
-              <TabsList className="grid w-full grid-cols-3">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-[800px]">
+              <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="chat" className="flex items-center gap-2">
                   <MessageSquare className="h-4 w-4" />
                   Chat
+                </TabsTrigger>
+                <TabsTrigger value="qa" className="flex items-center gap-2">
+                  <HelpCircle className="h-4 w-4" />
+                  Q&A
                 </TabsTrigger>
                 <TabsTrigger value="knowledge-base" className="flex items-center gap-2">
                   <Database className="h-4 w-4" />
@@ -71,6 +76,10 @@ const AppContent = () => {
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsContent value="chat" className="m-0">
             <ChatContainer modelSettings={globalModelSettings} />
+          </TabsContent>
+          
+          <TabsContent value="qa" className="m-0">
+            <QAContainer modelSettings={globalModelSettings} />
           </TabsContent>
           
           <TabsContent value="knowledge-base" className="m-0">

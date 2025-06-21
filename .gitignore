@@ -101,4 +101,4 @@ ehthumbs.db
 Thumbs.db
 
 backend/.env
-backend/.env
+frontend/.env

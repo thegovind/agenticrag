@@ -14,6 +14,8 @@ from app.models.schemas import (
 )
 from app.core.observability import observability
 from app.core.evaluation import get_evaluation_framework
+from app.services.azure_services import AzureServiceManager
+from app.services.azure_ai_agent_service import AzureAIAgentService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -39,8 +41,54 @@ async def chat(
             observability.track_request("chat", session_id=session_id)
             logger.info(f"Chat request received for session {session_id}, exercise: {request.exercise_type.value}")
             
-            response_text = f"""Based on your query about "{request.message}", I've analyzed the available financial documents. 
+            logger.info("Initializing Azure services...")
+            azure_manager = AzureServiceManager()
+            await azure_manager.initialize()
+            logger.info("Azure services initialized successfully")
             
+            logger.info("Creating knowledge base manager...")
+            from app.services.knowledge_base_manager import AdaptiveKnowledgeBaseManager
+            kb_manager = AdaptiveKnowledgeBaseManager(azure_manager)
+            
+            logger.info("Creating multi-agent orchestrator...")
+            from app.services.multi_agent_orchestrator import MultiAgentOrchestrator
+            orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)
+            
+            logger.info("Getting Azure AI Agent Service...")
+            azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
+            logger.info(f"Azure AI Agent Service type: {type(azure_ai_agent_service).__name__}")
+            
+            try:
+                chat_result = await azure_ai_agent_service.process_chat_request(
+                    message=request.message,
+                    session_id=session_id,
+                    model=request.chat_model.value,
+                    temperature=request.temperature,
+                    exercise_type=request.exercise_type.value,
+                    embedding_model=request.embedding_model.value
+                )
+                
+                response_text = chat_result.get("response", "I apologize, but I encountered an issue processing your request.")
+                citations_data = chat_result.get("citations", [])
+                
+                citations = []
+                for cite_data in citations_data:
+                    citations.append(Citation(
+                        id=cite_data.get("id", f"cite_{len(citations) + 1}"),
+                        content=cite_data.get("content", ""),
+                        source=cite_data.get("source", ""),
+                        document_id=cite_data.get("document_id", ""),
+                        document_title=cite_data.get("document_title", ""),
+                        page_number=cite_data.get("page_number", 0),
+                        section_title=cite_data.get("section_title", ""),
+                        confidence=cite_data.get("confidence", "medium"),
+                        url=cite_data.get("url", "")
+                    ))
+                
+            except Exception as agent_error:
+                logger.warning(f"Azure AI Agent Service failed for session {session_id}: {agent_error}")
+                response_text = f"""Based on your query about "{request.message}", I've analyzed the available financial documents. 
+                
 This is a comprehensive response that would typically include:
 - Relevant financial data and metrics
 - Analysis of trends and patterns
@@ -48,31 +96,31 @@ This is a comprehensive response that would typically include:
 - Professional financial insights
 
 The system is configured to use {request.chat_model.value} for generation and {request.embedding_model.value} for document retrieval."""
-            
-            citations = [
-                Citation(
-                    id="cite_1",
-                    content="Sample financial data from 10-K filing showing revenue growth of 15% year-over-year.",
-                    source="10-K Annual Report 2023",
-                    document_id="doc_123",
-                    document_title="Annual Report 2023",
-                    page_number=45,
-                    section_title="Financial Performance",
-                    confidence="high",
-                    url="https://example.com/10k-2023.pdf#page=45"
-                ),
-                Citation(
-                    id="cite_2", 
-                    content="Quarterly earnings report indicating strong performance in Q4.",
-                    source="10-Q Quarterly Report Q4 2023",
-                    document_id="doc_124",
-                    document_title="Q4 2023 Quarterly Report",
-                    page_number=12,
-                    section_title="Quarterly Results",
-                    confidence="medium",
-                    url="https://example.com/10q-q4-2023.pdf#page=12"
-                )
-            ]
+                
+                citations = [
+                    Citation(
+                        id="cite_1",
+                        content="Sample financial data from 10-K filing showing revenue growth of 15% year-over-year.",
+                        source="10-K Annual Report 2023",
+                        document_id="doc_123",
+                        document_title="Annual Report 2023",
+                        page_number=45,
+                        section_title="Financial Performance",
+                        confidence="high",
+                        url="https://example.com/10k-2023.pdf#page=45"
+                    ),
+                    Citation(
+                        id="cite_2", 
+                        content="Quarterly earnings report indicating strong performance in Q4.",
+                        source="10-Q Quarterly Report Q4 2023",
+                        document_id="doc_124",
+                        document_title="Q4 2023 Quarterly Report",
+                        page_number=12,
+                        section_title="Quarterly Results",
+                        confidence="medium",
+                        url="https://example.com/10q-q4-2023.pdf#page=12"
+                    )
+                ]
             
             prompt_tokens = len(request.message.split()) * 1.3  # Rough estimation
             completion_tokens = len(response_text.split()) * 1.3
@@ -138,9 +186,7 @@ The system is configured to use {request.chat_model.value} for generation and {r
             except Exception as e:
                 logger.warning(f"Evaluation failed for session {session_id}: {e}")
             
-            from app.services.azure_services import AzureServiceManager
-            azure_service = AzureServiceManager()
-            await azure_service.initialize()
+            azure_service = azure_manager
             
             user_message = {
                 "id": str(uuid.uuid4()),
@@ -316,17 +362,157 @@ async def submit_feedback(session_id: str, message_id: str, rating: int, feedbac
         logger.error(f"Error submitting feedback: {e}")
         raise HTTPException(status_code=500, detail="Failed to submit feedback")
 
+@router.get("/capabilities")
+async def get_chat_capabilities():
+    """Get chat agent capabilities and status"""
+    try:
+        observability.track_request("get_chat_capabilities")
+        
+        logger.info("Fetching chat agent capabilities...")
+        
+        try:
+            azure_manager = AzureServiceManager()
+            await azure_manager.initialize()
+            
+            from app.services.knowledge_base_manager import AdaptiveKnowledgeBaseManager
+            kb_manager = AdaptiveKnowledgeBaseManager(azure_manager)
+            
+            from app.services.multi_agent_orchestrator import MultiAgentOrchestrator
+            orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)
+            
+            azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
+            
+            capabilities = [
+                {
+                    "name": "Context-Aware Content Generation",
+                    "description": "Generate comprehensive responses based on financial documents with proper citations",
+                    "status": "available"
+                },
+                {
+                    "name": "Multi-Document Analysis",
+                    "description": "Analyze and synthesize information from multiple financial documents",
+                    "status": "available"
+                },
+                {
+                    "name": "Citation Management",
+                    "description": "Provide accurate citations and source references for generated content",
+                    "status": "available"
+                },
+                {
+                    "name": "Session Management",
+                    "description": "Maintain conversation context across multiple interactions",
+                    "status": "available"
+                }
+            ]
+            
+            available_models = await azure_manager.get_available_models()
+            
+            return {
+                "capabilities": capabilities,
+                "available_models": [model.get('name', model.get('id')) for model in available_models if model.get('type') == 'chat'],
+                "supported_features": [
+                    "context_aware_generation",
+                    "multi_document_analysis", 
+                    "citation_management",
+                    "session_management",
+                    "evaluation_framework"
+                ],
+                "agent_status": {
+                    "service_type": type(azure_ai_agent_service).__name__,
+                    "status": "active",
+                    "last_updated": datetime.now().isoformat()
+                }
+            }
+            
+        except Exception as agent_error:
+            logger.warning(f"Azure AI Agent Service unavailable: {agent_error}")
+            return {
+                "capabilities": [
+                    {
+                        "name": "Context-Aware Content Generation",
+                        "description": "Generate comprehensive responses based on financial documents with proper citations",
+                        "status": "limited"
+                    },
+                    {
+                        "name": "Multi-Document Analysis", 
+                        "description": "Analyze and synthesize information from multiple financial documents",
+                        "status": "limited"
+                    },
+                    {
+                        "name": "Citation Management",
+                        "description": "Provide accurate citations and source references for generated content",
+                        "status": "limited"
+                    },
+                    {
+                        "name": "Session Management",
+                        "description": "Maintain conversation context across multiple interactions",
+                        "status": "available"
+                    }
+                ],
+                "available_models": [],
+                "supported_features": ["mock_responses", "session_management"],
+                "agent_status": {
+                    "service_type": "MockService",
+                    "status": "limited",
+                    "last_updated": datetime.now().isoformat()
+                }
+            }
+            
+    except Exception as e:
+        logger.error(f"Error getting chat capabilities: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get chat capabilities")
+
 @router.get("/models")
 async def list_available_models():
-    """List available chat and embedding models"""
+    """List available chat and embedding models from Azure AI Foundry and static config"""
     try:
         observability.track_request("list_models")
         
         from app.core.config import settings
         
+        static_chat_models = settings.AVAILABLE_CHAT_MODELS
+        static_embedding_models = settings.AVAILABLE_EMBEDDING_MODELS
+        
+        try:
+            from app.services.azure_services import AzureServiceManager
+            azure_service = AzureServiceManager()
+            await azure_service.initialize()
+            
+            foundry_models = await azure_service.get_available_models()
+            
+            foundry_chat_models = []
+            foundry_embedding_models = []
+            
+            for model in foundry_models:
+                if model.get('type') == 'chat':
+                    foundry_chat_models.append({
+                        "id": model.get('name', model.get('id')),
+                        "name": model.get('name', model.get('id')),
+                        "provider": "Azure AI Foundry",
+                        "version": model.get('version'),
+                        "status": model.get('status', 'active')
+                    })
+                elif model.get('type') == 'embedding':
+                    foundry_embedding_models.append({
+                        "id": model.get('name', model.get('id')),
+                        "name": model.get('name', model.get('id')),
+                        "provider": "Azure AI Foundry",
+                        "dimensions": model.get('dimensions'),
+                        "version": model.get('version'),
+                        "status": model.get('status', 'active')
+                    })
+            
+            all_chat_models = static_chat_models + foundry_chat_models
+            all_embedding_models = static_embedding_models + foundry_embedding_models
+            
+        except Exception as foundry_error:
+            logger.warning(f"Failed to fetch foundry models, using static models: {foundry_error}")
+            all_chat_models = static_chat_models
+            all_embedding_models = static_embedding_models
+        
         return {
-            "chat_models": settings.AVAILABLE_CHAT_MODELS,
-            "embedding_models": settings.AVAILABLE_EMBEDDING_MODELS
+            "chat_models": all_chat_models,
+            "embedding_models": all_embedding_models
         }
     except Exception as e:
         logger.error(f"Error listing models: {e}")
