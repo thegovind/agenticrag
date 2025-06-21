@@ -4,7 +4,7 @@ azure-cosmos==4.5.1
 azure-ai-formrecognizer==3.3.2
 azure-identity==1.15.0
 azure-keyvault-secrets==4.7.0
-azure-monitor-opentelemetry==1.2.0
+azure-monitor-opentelemetry>=1.6.0
 azure-ai-ml==1.12.0
 
 # Azure AI Services (evaluation will be done via OpenAI calls)
@@ -28,11 +28,7 @@ PyPDF2==3.0.1
 openpyxl==3.1.2
 tiktoken==0.5.2
 
-# Observability and Monitoring
-opentelemetry-api==1.22.0
-opentelemetry-sdk==1.22.0
-opentelemetry-instrumentation-fastapi==0.43b0
-opentelemetry-instrumentation-httpx==0.43b0
+# Observability and Monitoring (let azure-monitor-opentelemetry manage these versions)
 psutil==5.9.8
 
 # Additional dependencies
