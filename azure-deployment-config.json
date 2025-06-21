@@ -1,0 +1,321 @@
+{
+  "deployment": {
+    "name": "rag-financial-poc",
+    "description": "RAG Financial POC - Adaptive Knowledge Base Management",
+    "version": "1.0.0",
+    "environment": "production"
+  },
+  "azure_services": {
+    "resource_group": {
+      "name": "rg-rag-financial-poc",
+      "location": "East US 2",
+      "tags": {
+        "project": "rag-financial-poc",
+        "environment": "production",
+        "cost-center": "ai-research"
+      }
+    },
+    "ai_foundry": {
+      "project_name": "rag-financial-project",
+      "workspace_name": "rag-financial-workspace",
+      "location": "East US 2",
+      "sku": "Standard",
+      "features": [
+        "model-deployment",
+        "evaluation-framework",
+        "observability",
+        "prompt-flow"
+      ]
+    },
+    "openai": {
+      "account_name": "openai-rag-financial",
+      "location": "East US 2",
+      "sku": "S0",
+      "deployments": [
+        {
+          "name": "gpt-4",
+          "model": "gpt-4",
+          "version": "0613",
+          "capacity": 10
+        },
+        {
+          "name": "gpt-4-turbo",
+          "model": "gpt-4-turbo",
+          "version": "2024-04-09",
+          "capacity": 10
+        },
+        {
+          "name": "gpt-35-turbo",
+          "model": "gpt-35-turbo",
+          "version": "0613",
+          "capacity": 20
+        },
+        {
+          "name": "text-embedding-ada-002",
+          "model": "text-embedding-ada-002",
+          "version": "2",
+          "capacity": 30
+        },
+        {
+          "name": "text-embedding-3-small",
+          "model": "text-embedding-3-small",
+          "version": "1",
+          "capacity": 30
+        },
+        {
+          "name": "text-embedding-3-large",
+          "model": "text-embedding-3-large",
+          "version": "1",
+          "capacity": 20
+        }
+      ]
+    },
+    "search": {
+      "service_name": "search-rag-financial",
+      "location": "East US 2",
+      "sku": "Standard",
+      "replica_count": 1,
+      "partition_count": 1,
+      "indexes": [
+        {
+          "name": "financial-documents-index",
+          "fields": [
+            {
+              "name": "id",
+              "type": "Edm.String",
+              "key": true,
+              "searchable": false
+            },
+            {
+              "name": "content",
+              "type": "Edm.String",
+              "searchable": true,
+              "analyzer": "en.microsoft"
+            },
+            {
+              "name": "content_vector",
+              "type": "Collection(Edm.Single)",
+              "searchable": true,
+              "dimensions": 1536,
+              "vectorSearchProfile": "default-vector-profile"
+            },
+            {
+              "name": "document_title",
+              "type": "Edm.String",
+              "searchable": true,
+              "filterable": true
+            },
+            {
+              "name": "document_type",
+              "type": "Edm.String",
+              "filterable": true,
+              "facetable": true
+            },
+            {
+              "name": "section_title",
+              "type": "Edm.String",
+              "searchable": true,
+              "filterable": true
+            },
+            {
+              "name": "page_number",
+              "type": "Edm.Int32",
+              "filterable": true,
+              "sortable": true
+            },
+            {
+              "name": "chunk_id",
+              "type": "Edm.String",
+              "filterable": true
+            },
+            {
+              "name": "metadata",
+              "type": "Edm.String",
+              "searchable": false
+            },
+            {
+              "name": "created_date",
+              "type": "Edm.DateTimeOffset",
+              "filterable": true,
+              "sortable": true
+            }
+          ],
+          "semantic_configuration": {
+            "name": "financial-semantic-config",
+            "title_field": "document_title",
+            "content_fields": ["content", "section_title"],
+            "keyword_fields": ["document_type"]
+          }
+        }
+      ]
+    },
+    "cosmos_db": {
+      "account_name": "cosmos-rag-financial",
+      "location": "East US 2",
+      "consistency_level": "Session",
+      "databases": [
+        {
+          "name": "rag-financial-db",
+          "containers": [
+            {
+              "name": "chat-sessions",
+              "partition_key": "/session_id",
+              "throughput": 400
+            },
+            {
+              "name": "evaluation-results",
+              "partition_key": "/session_id",
+              "throughput": 400
+            },
+            {
+              "name": "document-metadata",
+              "partition_key": "/document_id",
+              "throughput": 400
+            },
+            {
+              "name": "user-feedback",
+              "partition_key": "/user_id",
+              "throughput": 400
+            }
+          ]
+        }
+      ]
+    },
+    "document_intelligence": {
+      "account_name": "doc-intel-rag-financial",
+      "location": "East US 2",
+      "sku": "S0",
+      "features": [
+        "layout-analysis",
+        "table-extraction",
+        "key-value-extraction",
+        "financial-document-analysis"
+      ]
+    },
+    "key_vault": {
+      "name": "kv-rag-financial",
+      "location": "East US 2",
+      "sku": "Standard",
+      "secrets": [
+        "azure-openai-api-key",
+        "azure-search-api-key",
+        "azure-cosmos-key",
+        "azure-document-intelligence-api-key",
+        "jwt-secret-key"
+      ]
+    },
+    "application_insights": {
+      "name": "ai-rag-financial",
+      "location": "East US 2",
+      "application_type": "web",
+      "features": [
+        "distributed-tracing",
+        "performance-monitoring",
+        "custom-metrics",
+        "log-analytics"
+      ]
+    },
+    "container_apps": {
+      "environment_name": "cae-rag-financial",
+      "location": "East US 2",
+      "apps": [
+        {
+          "name": "rag-financial-backend",
+          "image": "rag-financial-backend:latest",
+          "port": 8000,
+          "cpu": 1.0,
+          "memory": "2Gi",
+          "min_replicas": 1,
+          "max_replicas": 10,
+          "environment_variables": [
+            {
+              "name": "AZURE_OPENAI_ENDPOINT",
+              "secretRef": "azure-openai-endpoint"
+            },
+            {
+              "name": "AZURE_OPENAI_API_KEY",
+              "secretRef": "azure-openai-api-key"
+            }
+          ]
+        },
+        {
+          "name": "rag-financial-frontend",
+          "image": "rag-financial-frontend:latest",
+          "port": 80,
+          "cpu": 0.5,
+          "memory": "1Gi",
+          "min_replicas": 1,
+          "max_replicas": 5
+        }
+      ]
+    }
+  },
+  "networking": {
+    "virtual_network": {
+      "name": "vnet-rag-financial",
+      "address_space": "10.0.0.0/16",
+      "subnets": [
+        {
+          "name": "subnet-container-apps",
+          "address_prefix": "10.0.1.0/24"
+        },
+        {
+          "name": "subnet-private-endpoints",
+          "address_prefix": "10.0.2.0/24"
+        }
+      ]
+    },
+    "private_endpoints": [
+      "cosmos-db",
+      "key-vault",
+      "search-service"
+    ]
+  },
+  "security": {
+    "managed_identity": {
+      "name": "mi-rag-financial",
+      "type": "SystemAssigned"
+    },
+    "rbac_assignments": [
+      {
+        "principal": "mi-rag-financial",
+        "role": "Cognitive Services OpenAI User",
+        "scope": "openai-rag-financial"
+      },
+      {
+        "principal": "mi-rag-financial",
+        "role": "Search Index Data Contributor",
+        "scope": "search-rag-financial"
+      },
+      {
+        "principal": "mi-rag-financial",
+        "role": "Cosmos DB Built-in Data Contributor",
+        "scope": "cosmos-rag-financial"
+      }
+    ]
+  },
+  "monitoring": {
+    "log_analytics_workspace": {
+      "name": "law-rag-financial",
+      "location": "East US 2",
+      "retention_days": 30
+    },
+    "alerts": [
+      {
+        "name": "High Error Rate",
+        "condition": "error_rate > 5%",
+        "action": "email-notification"
+      },
+      {
+        "name": "High Response Time",
+        "condition": "avg_response_time > 5s",
+        "action": "email-notification"
+      },
+      {
+        "name": "Token Usage Threshold",
+        "condition": "daily_tokens > 100000",
+        "action": "email-notification"
+      }
+    ]
+  }
+}
