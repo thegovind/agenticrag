@@ -18,19 +18,19 @@ interface ModelSelectorProps {
   settings: ModelSettings;
 }
 
-const CHAT_MODELS = [
-  { id: 'gpt-4', name: 'GPT-4', provider: 'Azure OpenAI', description: 'Most capable model' },
-  { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', provider: 'Azure OpenAI', description: 'Faster GPT-4' },
-  { id: 'gpt-35-turbo', name: 'GPT-3.5 Turbo', provider: 'Azure OpenAI', description: 'Fast and efficient' },
-  { id: 'financial-llm', name: 'Financial LLM', provider: 'Industry', description: 'Financial services specialized' },
-  { id: 'grok', name: 'Grok', provider: 'xAI', description: 'Real-time knowledge' },
-  { id: 'deepseek', name: 'DeepSeek', provider: 'DeepSeek', description: 'Code and reasoning' },
+const CHAT_MODELS = [{}
+  // { id: 'gpt-4', name: 'GPT-4', provider: 'Azure OpenAI', description: 'Most capable model' },
+  // { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', provider: 'Azure OpenAI', description: 'Faster GPT-4' },
+  // { id: 'gpt-35-turbo', name: 'GPT-3.5 Turbo', provider: 'Azure OpenAI', description: 'Fast and efficient' },
+  // { id: 'financial-llm', name: 'Financial LLM', provider: 'Industry', description: 'Financial services specialized' },
+  // { id: 'grok', name: 'Grok', provider: 'xAI', description: 'Real-time knowledge' },
+  // { id: 'deepseek', name: 'DeepSeek', provider: 'DeepSeek', description: 'Code and reasoning' },
 ];
 
-const EMBEDDING_MODELS = [
-  { id: 'text-embedding-ada-002', name: 'Ada-002', provider: 'Azure OpenAI', dimensions: 1536 },
-  { id: 'text-embedding-3-small', name: 'Embedding-3 Small', provider: 'Azure OpenAI', dimensions: 1536 },
-  { id: 'text-embedding-3-large', name: 'Embedding-3 Large', provider: 'Azure OpenAI', dimensions: 3072 },
+const EMBEDDING_MODELS = [{}
+  // { id: 'text-embedding-ada-002', name: 'Ada-002', provider: 'Azure OpenAI', dimensions: 1536 },
+  // { id: 'text-embedding-3-small', name: 'Embedding-3 Small', provider: 'Azure OpenAI', dimensions: 1536 },
+  // { id: 'text-embedding-3-large', name: 'Embedding-3 Large', provider: 'Azure OpenAI', dimensions: 3072 },
 ];
 
 const SEARCH_TYPES = [

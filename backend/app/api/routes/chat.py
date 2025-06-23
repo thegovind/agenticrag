@@ -35,8 +35,8 @@ async def chat(
         async with observability.trace_operation(
             "chat_processing",
             session_id=session_id,
-            model=request.chat_model.value,
-            exercise_type=request.exercise_type.value
+            model=request.chat_model,
+            exercise_type=request.exercise_type
         ) as span:
             
             observability.track_request("chat", session_id=session_id)
@@ -63,10 +63,10 @@ async def chat(
                 chat_result = await azure_ai_agent_service.process_chat_request(
                     message=request.message,
                     session_id=session_id,
-                    model=request.chat_model.value,
+                    model=request.chat_model,
                     temperature=request.temperature,
-                    exercise_type=request.exercise_type.value,
-                    embedding_model=request.embedding_model.value
+                    exercise_type=request.exercise_type,
+                    embedding_model=request.embedding_model
                 )
                 
                 response_text = chat_result.get("response", "I apologize, but I encountered an issue processing your request.")
@@ -96,7 +96,7 @@ This is a comprehensive response that would typically include:
 - Supporting evidence from source documents
 - Professional financial insights
 
-The system is configured to use {request.chat_model.value} for generation and {request.embedding_model.value} for document retrieval."""
+The system is configured to use {request.chat_model} for generation and {request.embedding_model} for document retrieval."""
                 
                 citations = [
                     Citation(
@@ -134,7 +134,7 @@ The system is configured to use {request.chat_model.value} for generation and {r
             }
             
             observability.track_tokens(
-                model=request.chat_model.value,
+                model=request.chat_model,
                 prompt_tokens=token_usage["prompt_tokens"],
                 completion_tokens=token_usage["completion_tokens"],
                 session_id=session_id
@@ -197,9 +197,9 @@ The system is configured to use {request.chat_model.value} for generation and {r
                 "content": request.message,
                 "timestamp": datetime.now().isoformat(),
                 "metadata": {
-                    "exercise_type": request.exercise_type.value,
-                    "model_used": request.chat_model.value,
-                    "embedding_model": request.embedding_model.value
+                    "exercise_type": request.exercise_type,
+                    "model_used": request.chat_model,
+                    "embedding_model": request.embedding_model
                 }
             }
             
@@ -211,8 +211,8 @@ The system is configured to use {request.chat_model.value} for generation and {r
                 "citations": [citation.dict() for citation in citations],
                 "metadata": {
                     "exercise_type": request.exercise_type.value,
-                    "model_used": request.chat_model.value,
-                    "embedding_model": request.embedding_model.value,
+                    "model_used": request.chat_model,
+                    "embedding_model": request.embedding_model,
                     "temperature": request.temperature,
                     "search_type": getattr(request, 'search_type', 'hybrid'),
                     "evaluation_count": len(evaluation_results),
@@ -231,8 +231,8 @@ The system is configured to use {request.chat_model.value} for generation and {r
                 citations=citations,
                 metadata={
                     "exercise_type": request.exercise_type.value,
-                    "model_used": request.chat_model.value,
-                    "embedding_model": request.embedding_model.value,
+                    "model_used": request.chat_model,
+                    "embedding_model": request.embedding_model,
                     "temperature": request.temperature,
                     "search_type": getattr(request, 'search_type', 'hybrid'),
                     "evaluation_count": len(evaluation_results),

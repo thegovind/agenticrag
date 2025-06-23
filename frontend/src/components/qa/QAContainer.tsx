@@ -3,7 +3,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { QuestionInput } from './QuestionInput';
 import { AnswerDisplay } from './AnswerDisplay';
-import { SourceVerification } from './SourceVerification';
+import { SourceVerification } from './SourceVerificationModal';
 import { QuestionDecomposition } from './QuestionDecomposition';
 import { AgentServiceStatus } from './AgentServiceStatus';
 import { ModelSettings } from '../shared/ModelConfiguration';
@@ -76,8 +76,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isVerifyingSourcesForAnswer, setIsVerifyingSourcesForAnswer] = useState<string | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
-  const [selectedAnswer, setSelectedAnswer] = useState<QAAnswer | null>(null);
-  const [showSourceVerification, setShowSourceVerification] = useState(false);
+  const [showSourceVerificationModal, setShowSourceVerificationModal] = useState(false);
   const [showQuestionDecomposition, setShowQuestionDecomposition] = useState(false);
   const [verifiedSources, setVerifiedSources] = useState<VerifiedSource[]>([]);
   const [decomposedQuestions, setDecomposedQuestions] = useState<{
@@ -236,8 +235,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
       }
       
       setVerifiedSources(verifiedSources);
-      setSelectedAnswer(answer);
-      setShowSourceVerification(true);
+      setShowSourceVerificationModal(true);
     } catch (error) {
       console.error('Error verifying sources:', error);
     } finally {
@@ -251,8 +249,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     localStorage.setItem('qaSessionId', newSessionId);
     setQuestions([]);
     setAnswers([]);
-    setSelectedAnswer(null);
-    setShowSourceVerification(false);
+    setShowSourceVerificationModal(false);
     setShowQuestionDecomposition(false);
     setShowAgentStatus(false);
     setVerifiedSources([]);
@@ -364,16 +361,10 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
           </div>
         </ResizablePanel>
         
-        {(showSourceVerification || showQuestionDecomposition || showAgentStatus) && (
+        {(showQuestionDecomposition || showAgentStatus) && (
           <>
             <ResizableHandle />
             <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
-              {showSourceVerification && selectedAnswer && (
-                <SourceVerification
-                  verifiedSources={verifiedSources}
-                  onClose={() => setShowSourceVerification(false)}
-                />
-              )}
               {showQuestionDecomposition && decomposedQuestions && (
                 <QuestionDecomposition
                   decomposition={decomposedQuestions}
@@ -398,6 +389,13 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
           </>
         )}
       </ResizablePanelGroup>
+      
+      {/* Source Verification Modal */}
+      <SourceVerification
+        verifiedSources={verifiedSources}
+        isOpen={showSourceVerificationModal}
+        onClose={() => setShowSourceVerificationModal(false)}
+      />
     </div>
   );
 };

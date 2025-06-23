@@ -27,6 +27,7 @@ if platform.system() == "Windows":
 from app.core.config import settings
 from app.core import observability
 from app.services.azure_storage_manager import AzureStorageManager, MockStorageManager
+from app.services.azure_openai_deployment_service import AzureOpenAIDeploymentService, MockAzureOpenAIDeploymentService
 
 logger = logging.getLogger(__name__)
 
@@ -762,7 +763,6 @@ class AzureServiceManager:
                     "created_at": message.get("timestamp"),
                     "updated_at": message.get("timestamp")
                 }
-            
             session_doc["messages"].append(message)
             session_doc["updated_at"] = message.get("timestamp")
             
@@ -792,7 +792,6 @@ class AzureServiceManager:
                     # Some other error occurred
                     logger.error(f"Failed to retrieve session history: {e}")
                     return []
-            
         except Exception as e:
             logger.error(f"Failed to retrieve session history: {e}")
             return []
@@ -801,30 +800,41 @@ class AzureServiceManager:
         """Retrieve available model deployments from Azure AI Foundry project"""
         try:
             # with observability.trace_operation("azure_get_available_models") as span:
-                if not self.project_client:
-                    logger.warning("Project client not initialized, returning mock models")
-            # span.set_attribute("using_mock", True)
-                    return self._get_mock_models()
-                
-                connections = await self._get_project_connections_internal()
-                models = []
-                
-                for connection in connections:
-                    if connection.get("connection_type") == ConnectionType.AZURE_OPEN_AI or connection.get("type") == "azure_openai":
-                        try:
-                            connection_models = await self._get_models_from_connection(connection)
-                            models.extend(connection_models)
-                        except Exception as e:
-                            logger.error(f"Failed to get models from connection {connection.get('name')}: {e}")
-                
-                if not models:
-                    logger.warning("No models found from project connections, using direct Azure OpenAI configuration")
-                    # Fallback to using direct Azure OpenAI configuration
-                    models = self._get_models_from_direct_config()
-                
-            # span.set_attribute("models_count", len(models))
+            if not self.project_client:
+                logger.warning("Project client not initialized, returning mock models")
+                # span.set_attribute("using_mock", True)
+                return self._get_mock_models()
+            
+            connections = await self._get_project_connections_internal()
+            models = []
+            
+            for connection in connections:
+                if connection.get("connection_type") == ConnectionType.AZURE_OPEN_AI or connection.get("type") == "azure_openai":
+                    try:
+                        connection_models = await self._get_models_from_connection(connection)
+                        models.extend(connection_models)
+                    except Exception as e:
+                        logger.error(f"Failed to get models from connection {connection.get('name')}: {e}")
+            
+            if not models:
+                logger.warning("No models found from project connections, using direct Azure OpenAI configuration")
+                # Fallback to using direct Azure OpenAI configuration
+                models = await self._get_models_from_direct_config()
+            
+            # Remove duplicates based on deployment name/id
+            unique_models = []
+            seen_ids = set()
+            for model in models:
+                model_id = model.get('id') or model.get('deployment_name')
+                if model_id and model_id not in seen_ids:
+                    unique_models.append(model)
+                    seen_ids.add(model_id)
+            
+            logger.info(f"Returning {len(unique_models)} unique models (removed {len(models) - len(unique_models)} duplicates)")
+            
+            # span.set_attribute("models_count", len(unique_models))
             # span.set_attribute("success", True)
-                return models
+            return unique_models
                 
         except Exception as e:
             logger.error(f"Failed to retrieve available models: {e}")
@@ -960,8 +970,7 @@ class AzureServiceManager:
                 {
                     "name": "fallback-azure-openai",
                     "type": "azure_openai",
-                    "connection_type": ConnectionType.AZURE_OPEN_AI,
-                    "status": "connected",
+                    "connection_type": ConnectionType.AZURE_OPEN_AI,                    "status": "connected",
                     "endpoint": "https://fallback-openai.openai.azure.com/"
                 }
             ]
@@ -970,65 +979,111 @@ class AzureServiceManager:
         """Get Azure AI Foundry project information"""
         try:
             # with observability.trace_operation("azure_get_project_info") as span:
-                if not self.project_client:
-            # span.set_attribute("using_mock", True)
-                    return {
-                        "project_name": "mock-project",
-                        "resource_group": "mock-rg",
-                        "subscription_id": "mock-subscription",
-                        "endpoint": "https://mock-project.cognitiveservices.azure.com/",
-                        "status": "mock",
-                        "client_type": "mock"
-                    }
-                
-                project_info = {
-                    "project_name": getattr(settings, 'AZURE_AI_FOUNDRY_PROJECT_NAME', 'unknown'),
-                    "resource_group": getattr(settings, 'AZURE_AI_FOUNDRY_RESOURCE_GROUP', 'unknown'),
-                    "subscription_id": getattr(settings, 'AZURE_SUBSCRIPTION_ID', 'unknown'),
-                    "endpoint": getattr(settings, 'AZURE_AI_PROJECT_ENDPOINT', 'unknown'),
-                    "status": "active",
-                    "client_type": "project_based"
+            if not self.project_client:
+                # span.set_attribute("using_mock", True)
+                return {
+                    "project_name": "mock-project",
+                    "resource_group": "mock-rg",
+                    "subscription_id": "mock-subscription",
+                    "endpoint": "https://mock-project.cognitiveservices.azure.com/",
+                    "status": "mock",
+                    "client_type": "mock"
                 }
-                
-                try:
-                    connections = await self.get_project_connections()
-                    models = await self.get_available_models()
-                    project_info.update({
-                        "connections_count": len(connections),
-                        "models_count": len(models),
-                        "connections": [conn.get("name") for conn in connections[:5]]  # First 5 connection names
-                    })
-                except Exception as e:
-                    logger.warning(f"Could not get connection/model counts: {e}")
-                    project_info.update({
-                        "connections_count": 0,
-                        "models_count": 0
-                    })
-                
+            
+            project_info = {
+                "project_name": getattr(settings, 'AZURE_AI_FOUNDRY_PROJECT_NAME', 'unknown'),
+                "resource_group": getattr(settings, 'AZURE_AI_FOUNDRY_RESOURCE_GROUP', 'unknown'),
+                "subscription_id": getattr(settings, 'AZURE_SUBSCRIPTION_ID', 'unknown'),
+                "endpoint": getattr(settings, 'AZURE_AI_PROJECT_ENDPOINT', 'unknown'),
+                "status": "active",
+                "client_type": "project_based"
+            }
+            
+            try:
+                connections = await self.get_project_connections()
+                models = await self.get_available_models()
+                project_info.update({
+                    "connections_count": len(connections),
+                    "models_count": len(models),
+                    "connections": [conn.get("name") for conn in connections[:5]]  # First 5 connection names
+                })
+            except Exception as e:
+                logger.warning(f"Could not get connection/model counts: {e}")
+                project_info.update({
+                    "connections_count": 0,
+                    "models_count": 0
+                })
+            
             # span.set_attribute("project_name", project_info["project_name"])
             # span.set_attribute("connections_count", project_info.get("connections_count", 0))
             # span.set_attribute("success", True)
-                
-                return project_info
-                
+            
+            return project_info
+            
         except Exception as e:
             logger.error(f"Failed to get project info: {e}")
             observability.record_error("azure_get_project_info_error", str(e))
             return {"error": str(e), "status": "error"}
-    
-    def _get_models_from_direct_config(self) -> List[Dict[str, Any]]:
-        """Get models from direct Azure OpenAI configuration as fallback"""
+
+    async def _get_models_from_direct_config(self) -> List[Dict[str, Any]]:
+        """Get models from Azure OpenAI Management API or fallback to direct configuration"""
         models = []
         
+        try:
+            # First try to get models from Azure OpenAI Management API
+            if (settings.AZURE_OPENAI_ENDPOINT and 
+                settings.AZURE_SUBSCRIPTION_ID and 
+                settings.AZURE_AI_FOUNDRY_RESOURCE_GROUP):
+                
+                logger.info("Attempting to fetch models from Azure OpenAI Management API")
+                
+                # Use mock service in development, real service in production
+                use_mock = os.getenv("MOCK_AZURE_SERVICES", "false").lower() == "true"
+                service_class = MockAzureOpenAIDeploymentService if use_mock else AzureOpenAIDeploymentService
+                
+                async with service_class(settings) as deployment_service:
+                    deployments = await deployment_service.get_deployments()
+                    
+                    for deployment in deployments:
+                        models.append({
+                            "id": deployment.deployment_name,
+                            "name": f"{deployment.model_name} ({deployment.deployment_name})",
+                            "deployment_name": deployment.deployment_name,
+                            "model_name": deployment.model_name,
+                            "model_version": deployment.model_version,
+                            "type": deployment.model_type,
+                            "status": "active" if deployment.provisioning_state == "Succeeded" else "inactive",
+                            "provider": "Azure OpenAI (Management API)",
+                            "capabilities": ["chat", "completion"] if deployment.model_type == "chat" else ["embedding"],
+                            "endpoint": settings.AZURE_OPENAI_ENDPOINT,
+                            "sku": deployment.sku_name,
+                            "capacity": deployment.capacity,
+                            "provisioning_state": deployment.provisioning_state
+                        })
+                    
+                    if models:
+                        logger.info(f"Successfully fetched {len(models)} models from Azure OpenAI Management API")
+                        return models
+                    else:
+                        logger.warning("No deployments found from Management API, falling back to direct config")
+        
+        except Exception as e:
+            logger.warning(f"Failed to fetch models from Management API: {e}, falling back to direct config")
+        
+        # Fallback to direct configuration if Management API fails
         if settings.AZURE_OPENAI_ENDPOINT and settings.AZURE_OPENAI_API_KEY:
+            logger.info("Using direct Azure OpenAI configuration as fallback")
+            
             # Add the configured chat model
             if settings.AZURE_OPENAI_DEPLOYMENT_NAME:
                 models.append({
                     "id": settings.AZURE_OPENAI_DEPLOYMENT_NAME,
                     "name": settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+                    "deployment_name": settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+                    "model_name": "Unknown",  # We don't know the actual model name in fallback
                     "type": "chat",
                     "status": "active",
-                    "provider": "Azure OpenAI (Direct Config)",
+                    "provider": "Azure OpenAI (Direct Config Fallback)",
                     "capabilities": ["chat", "completion"],
                     "endpoint": settings.AZURE_OPENAI_ENDPOINT
                 })
@@ -1038,9 +1093,11 @@ class AzureServiceManager:
                 models.append({
                     "id": settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME,
                     "name": settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME,
+                    "deployment_name": settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME,
+                    "model_name": "Unknown",  # We don't know the actual model name in fallback
                     "type": "embedding",
                     "status": "active",
-                    "provider": "Azure OpenAI (Direct Config)",
+                    "provider": "Azure OpenAI (Direct Config Fallback)",
                     "capabilities": ["embedding"],
                     "endpoint": settings.AZURE_OPENAI_ENDPOINT
                 })

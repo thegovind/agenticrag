@@ -117,10 +117,14 @@ class DocumentProcessor:
                 logger.info(f"Step 5 COMPLETE (FALLBACK): Created {len(chunks)} chunks using basic chunking")
             
             logger.info(f"Step 6: Generating embeddings for chunks...")
+            # Extract embedding model from metadata
+            embedding_model = metadata.get("embedding_model") if metadata else None
+            logger.info(f"Using embedding model: {embedding_model or 'default from settings'}")
+            
             for i, chunk in enumerate(chunks):
                 if i % 5 == 0:  # Log every 5th chunk to avoid spam
                     logger.info(f"Generating embedding for chunk {i+1}/{len(chunks)}")
-                chunk.embedding = await self.azure_manager.get_embedding(chunk.content)
+                chunk.embedding = await self.azure_manager.get_embedding(chunk.content, model=embedding_model)
             logger.info(f"Step 6 COMPLETE: All embeddings generated")
             
             logger.info(f"Step 6 COMPLETE: All embeddings generated")
@@ -1084,7 +1088,8 @@ class DocumentProcessor:
         
         # Extract intelligent metadata using LLM
         logger.info(f"DEBUG: Starting intelligent metadata extraction...")
-        intelligent_metadata = await self._extract_intelligent_metadata(content, metadata)
+        chat_model = (metadata or {}).get('chat_model')
+        intelligent_metadata = await self._extract_intelligent_metadata(content, metadata, chat_model)
         logger.info(f"DEBUG: Intelligent metadata extracted: {intelligent_metadata}")
         
         # Convert document to markdown format
@@ -1135,19 +1140,22 @@ class DocumentProcessor:
         logger.info(f"DEBUG: Final chunks created: {len(chunks)}")
         return chunks
 
-    async def _extract_intelligent_metadata(self, content: str, existing_metadata: Dict) -> Dict:
+    async def _extract_intelligent_metadata(self, content: str, existing_metadata: Dict, chat_model: str = None) -> Dict:
         """
         Use LLM to intelligently extract metadata from document content
         """
         try:
             logger.info(f"Starting intelligent metadata extraction using LLM...")
             
+            # Use provided chat model or fall back to environment variable
+            deployment_name = chat_model or settings.AZURE_OPENAI_DEPLOYMENT_NAME
+            
             # Skip LLM extraction if deployment is not available, use basic extraction
-            if not settings.AZURE_OPENAI_DEPLOYMENT_NAME or settings.AZURE_OPENAI_DEPLOYMENT_NAME == "":
+            if not deployment_name or deployment_name == "":
                 logger.warning("No Azure OpenAI deployment configured, skipping LLM metadata extraction")
                 return self._extract_basic_metadata(content, existing_metadata)
             
-            logger.info(f"DEBUG: Using deployment: {settings.AZURE_OPENAI_DEPLOYMENT_NAME}")
+            logger.info(f"DEBUG: Using deployment: {deployment_name}")
             logger.info(f"DEBUG: Content length for LLM: {len(content)}")
             logger.info(f"DEBUG: Content sample: {content[:500]}...")
             
@@ -1169,7 +1177,7 @@ class DocumentProcessor:
             
             logger.info(f"Calling Azure OpenAI for metadata extraction...")
             response = self.azure_manager.openai_client.chat.completions.create(
-                model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,  # Use the correct deployment name
+                model=deployment_name,  # Use the provided deployment name
                 messages=[
                     {"role": "system", "content": "You are an expert financial document analyzer. Extract metadata accurately and return only valid JSON."},
                     {"role": "user", "content": extraction_prompt}

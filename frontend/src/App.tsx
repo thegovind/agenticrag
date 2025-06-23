@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { MessageSquare, BarChart3, Database, HelpCircle, FileText } from 'lucide-react';
+import { MessageSquare, BarChart3, HelpCircle, FileText } from 'lucide-react';
 import { ChatContainer } from '@/components/chat/ChatContainer';
 import { AdminDashboard } from '@/components/admin/AdminDashboard';
 import KnowledgeBaseManager from '@/components/knowledge-base/KnowledgeBaseManager';
 import { QAContainer } from '@/components/qa/QAContainer';
 import SECDocumentsManager from '@/components/sec-documents/SECDocumentsManager';
 import { ModelConfiguration, ModelSettings } from '@/components/shared/ModelConfiguration';
+import { CitigroupLogo } from '@/components/shared/CitigroupLogo';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import './App.css';
 
@@ -28,13 +29,21 @@ const AppContent = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="border-b">
+    <div className={`min-h-screen transition-colors duration-200 ${
+      theme === 'dark' ? 'dark bg-background text-foreground' : 
+      theme === 'customer' ? 'customer bg-background text-foreground' :
+      'bg-background text-foreground'
+    }`}>
+      <div className="border-b bg-background">
         <div className="flex h-16 items-center px-4">
           <div className="flex items-center space-x-4">
             <div className="flex items-center space-x-2">
               <MessageSquare className="h-6 w-6" />
-              <h1 className="text-xl font-semibold">RAG Financial Assistant</h1>
+              {theme === 'customer' ? (
+                <CitigroupLogo size="md" />
+              ) : (
+                <h1 className="text-xl font-semibold">RAG Financial Assistant</h1>
+              )}
             </div>
           </div>
           
@@ -53,10 +62,10 @@ const AppContent = () => {
                   <FileText className="h-4 w-4" />
                   SEC Docs
                 </TabsTrigger>
-                <TabsTrigger value="knowledge-base" className="flex items-center gap-2">
+                {/* <TabsTrigger value="knowledge-base" className="flex items-center gap-2">
                   <Database className="h-4 w-4" />
                   Knowledge Base
-                </TabsTrigger>
+                </TabsTrigger> */}
                 <TabsTrigger value="admin" className="flex items-center gap-2">
                   <BarChart3 className="h-4 w-4" />
                   Admin
@@ -77,25 +86,25 @@ const AppContent = () => {
         onThemeChange={setTheme}
       />
 
-      <main className="flex-1">
+      <main className="flex-1 bg-background">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsContent value="chat" className="m-0">
+          <TabsContent value="chat" className="m-0 bg-background">
             <ChatContainer modelSettings={globalModelSettings} />
           </TabsContent>
           
-          <TabsContent value="qa" className="m-0">
+          <TabsContent value="qa" className="m-0 bg-background">
             <QAContainer modelSettings={globalModelSettings} />
           </TabsContent>
           
-          <TabsContent value="sec-docs" className="m-0">
+          <TabsContent value="sec-docs" className="m-0 bg-background">
             <SECDocumentsManager />
           </TabsContent>
           
-          <TabsContent value="knowledge-base" className="m-0">
+          <TabsContent value="knowledge-base" className="m-0 bg-background">
             <KnowledgeBaseManager modelSettings={globalModelSettings} />
           </TabsContent>
           
-          <TabsContent value="admin" className="m-0">
+          <TabsContent value="admin" className="m-0 bg-background">
             <AdminDashboard />
           </TabsContent>
         </Tabs>

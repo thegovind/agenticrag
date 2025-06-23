@@ -104,102 +104,56 @@ class AzureAIAgentService:
         return tools
     
     async def create_qa_agent(self, name: str, instructions: str, model_deployment: str = None) -> Agent:
-        """Create a QA agent for Exercise 2 functionality"""
-        try:
-            async with observability.trace_operation("create_qa_agent") as span:
-                span.set_attribute("agent_name", name)
-                
-                if not model_deployment:
-                    model_deployment = settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
-                
-                enhanced_instructions = f"""
-                {instructions}
-                
-                You are a financial analysis expert specializing in question answering with source verification.
-                
-                Key capabilities:
-                1. Answer complex financial questions comprehensively
-                2. Decompose complex questions into researchable sub-questions
-                3. Verify source credibility and trustworthiness
-                4. Synthesize information from multiple sources
-                5. Provide clear reasoning and justifications
-                
-                Guidelines:
-                - Always cite sources with specific references
-                - Evaluate source credibility (SEC filings are highly credible)
-                - Acknowledge limitations and uncertainties
-                - Use financial terminology appropriately
-                - Provide quantitative analysis when possible
-                """
-                
-                agent = self.client.agents.create_agent(
-                    model=model_deployment,
-                    name=name,
-                    instructions=enhanced_instructions,
-                    tools=self.tools
-                )
-                
-                self.agents[agent.id] = agent
-                
-                span.set_attribute("agent_id", agent.id)
-                span.set_attribute("success", True)
-                
-                logger.info(f"Created QA agent: {agent.id} with name: {name}")
-                return agent
-                
-        except Exception as e:
-            logger.error(f"Error creating QA agent: {e}")
-            observability.record_error("create_qa_agent_error", str(e))
-            raise
+        """Create a QA agent for Exercise 2 functionality - now uses find_or_create pattern"""
+        return await self.find_or_create_agent(
+            agent_name=name,
+            instructions=f"""
+            {instructions}
+            
+            You are a financial analysis expert specializing in question answering with source verification.
+            
+            Key capabilities:
+            1. Answer complex financial questions comprehensively
+            2. Decompose complex questions into researchable sub-questions
+            3. Verify source credibility and trustworthiness
+            4. Synthesize information from multiple sources
+            5. Provide clear reasoning and justifications
+            
+            Guidelines:
+            - Always cite sources with specific references
+            - Evaluate source credibility (SEC filings are highly credible)
+            - Acknowledge limitations and uncertainties
+            - Use financial terminology appropriately
+            - Provide quantitative analysis when possible
+            """,
+            model_deployment=model_deployment
+        )
     
     async def create_content_generator_agent(self, name: str, instructions: str, model_deployment: str = None) -> Agent:
-        """Create a content generator agent for Exercise 1 functionality"""
-        try:
-            async with observability.trace_operation("create_content_generator_agent") as span:
-                span.set_attribute("agent_name", name)
-                
-                if not model_deployment:
-                    model_deployment = settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
-                
-                enhanced_instructions = f"""
-                {instructions}
-                
-                You are a financial content generation expert specializing in creating high-quality financial content.
-                
-                Key capabilities:
-                1. Generate comprehensive financial reports and analyses
-                2. Create executive summaries and technical documentation
-                3. Enhance content with proper citations
-                4. Adapt writing style and tone to context
-                5. Ensure factual accuracy and professional standards
-                
-                Guidelines:
-                - Use appropriate financial terminology
-                - Include specific metrics and data points
-                - Maintain professional tone and style
-                - Cite all sources appropriately
-                - Focus on accuracy and relevance
-                """
-                
-                agent = self.client.agents.create_agent(
-                    model=model_deployment,
-                    name=name,
-                    instructions=enhanced_instructions,
-                    tools=self.tools
-                )
-                
-                self.agents[agent.id] = agent
-                
-                span.set_attribute("agent_id", agent.id)
-                span.set_attribute("success", True)
-                
-                logger.info(f"Created content generator agent: {agent.id} with name: {name}")
-                return agent
-                
-        except Exception as e:
-            logger.error(f"Error creating content generator agent: {e}")
-            observability.record_error("create_content_generator_agent_error", str(e))
-            raise
+        """Create a content generator agent for Exercise 1 functionality - now uses find_or_create pattern"""
+        return await self.find_or_create_agent(
+            agent_name=name,
+            instructions=f"""
+            {instructions}
+            
+            You are a financial content generation expert specializing in creating high-quality financial content.
+            
+            Key capabilities:
+            1. Generate comprehensive financial reports and analyses
+            2. Create executive summaries and technical documentation
+            3. Enhance content with proper citations
+            4. Adapt writing style and tone to context
+            5. Ensure factual accuracy and professional standards
+            
+            Guidelines:
+            - Use appropriate financial terminology
+            - Include specific metrics and data points
+            - Maintain professional tone and style
+            - Cite all sources appropriately
+            - Focus on accuracy and relevance
+            """,
+            model_deployment=model_deployment
+        )
     
     async def run_agent_conversation(self, agent_id: str, thread_id: str, message: str, context: Dict[str, Any] = None) -> AgentRunResult:
         """Execute agent conversation and return results"""
@@ -494,8 +448,9 @@ class AzureAIAgentService:
                 span.set_attribute("retrieved_documents", len(search_results))
                 
                 # Step 3: Create QA agent with enhanced instructions including RAG context
-                qa_agent = await self.create_qa_agent(
-                    name=f"QA_Agent_{session_id}",
+                chat_deployment = model_config.get('chat_model') or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                qa_agent = await self.find_or_create_agent(
+                    agent_name="Financial_QA_Agent",
                     instructions=f"""
                     You are a financial QA expert specializing in comprehensive question answering with source verification.
                     
@@ -517,7 +472,7 @@ class AzureAIAgentService:
                     Always maintain high standards for financial accuracy and cite your sources appropriately.
                     Never make up information that is not in the retrieved documents.
                     """,
-                    model_deployment=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                    model_deployment=chat_deployment
                 )
                 
                 # Create thread using Azure AI Projects SDK
@@ -583,8 +538,9 @@ class AzureAIAgentService:
                 span.set_attribute("question_length", len(question))
                 span.set_attribute("session_id", session_id)
                 
-                decomposition_agent = await self.create_qa_agent(
-                    name=f"Decomposition_Agent_{session_id}",
+                chat_deployment = model_config.get('chat_model') or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                decomposition_agent = await self.find_or_create_agent(
+                    agent_name="Question_Decomposition_Agent",
                     instructions="""
                     You are a financial question decomposition expert. Your task is to break down complex financial questions into smaller, researchable sub-questions.
                     
@@ -603,7 +559,7 @@ class AzureAIAgentService:
                     
                     Reasoning: [Explain your decomposition approach]
                     """,
-                    model_deployment=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                    model_deployment=chat_deployment
                 )
                 
                 # Create thread using Azure AI Projects SDK structure
@@ -666,8 +622,10 @@ class AzureAIAgentService:
                 span.set_attribute("sources_count", len(sources))
                 span.set_attribute("session_id", session_id)
                 
-                verification_agent = await self.create_qa_agent(
-                    name=f"Verification_Agent_{session_id}",
+                # Extract chat model from sources (assuming it's in context)
+                chat_deployment = context.get('model_config', {}).get('chat_model') or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                verification_agent = await self.find_or_create_agent(
+                    agent_name="Source_Verification_Agent",
                     instructions="""
                     You are a financial source credibility expert. Your task is to assess the trustworthiness and reliability of financial information sources.
                     
@@ -692,7 +650,7 @@ class AzureAIAgentService:
                     
                     Overall Assessment: [Summary of findings]
                     """,
-                    model_deployment=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                    model_deployment=chat_deployment
                 )
                 
                 # Create thread using Azure AI Projects SDK structure
@@ -826,6 +784,57 @@ class AzureAIAgentService:
             logger.error(f"Error verifying source credibility: {e}")
             observability.record_error("azure_ai_agent_verification_error", str(e))
             raise
+    
+    async def find_or_create_agent(self, agent_name: str, instructions: str, model_deployment: str = None) -> Agent:
+        """Find existing agent by name or create a new one if not found"""
+        try:
+            async with observability.trace_operation("find_or_create_agent") as span:
+                span.set_attribute("agent_name", agent_name)
+                
+                agent_id = None
+                found_agent = False
+                
+                # List all agents and check if one with the target name exists
+                agent_list = self.client.agents.list_agents()
+                for agent in agent_list:
+                    if agent.name == agent_name:
+                        agent_id = agent.id
+                        found_agent = True
+                        break
+                
+                if found_agent:
+                    # Get the existing agent
+                    agent_definition = self.client.agents.get_agent(agent_id)
+                    logger.info(f"Found existing agent: {agent_name} with ID: {agent_id}")
+                    span.set_attribute("agent_found", True)
+                    span.set_attribute("agent_id", agent_id)
+                else:
+                    # Create a new agent
+                    if not model_deployment:
+                        model_deployment = settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                    
+                    agent_definition = self.client.agents.create_agent(
+                        model=model_deployment,
+                        name=agent_name,
+                        instructions=instructions,
+                        tools=self.tools
+                    )
+                    logger.info(f"Created new agent: {agent_name} with ID: {agent_definition.id}")
+                    span.set_attribute("agent_found", False)
+                    span.set_attribute("agent_id", agent_definition.id)
+                
+                # Store in local cache
+                self.agents[agent_definition.id] = agent_definition
+                span.set_attribute("success", True)
+                
+                return agent_definition
+                
+        except Exception as e:
+            logger.error(f"Error finding or creating agent {agent_name}: {e}")
+            observability.record_error("find_or_create_agent_error", str(e))
+            raise
+
+    # ...existing code...
 
 class MockAzureAIAgentService(AzureAIAgentService):
     """Mock implementation for testing and development"""
@@ -837,7 +846,14 @@ class MockAzureAIAgentService(AzureAIAgentService):
         self.mock_thread_counter = 0
         
     async def create_qa_agent(self, name: str, instructions: str, model_deployment: str = None) -> Agent:
-        """Mock QA agent creation"""
+        """Mock QA agent creation - reuses agents by name"""
+        # Check if agent with this name already exists
+        for agent_id, agent in self.agents.items():
+            if agent.name == name:
+                logger.info(f"Reusing existing mock QA agent: {agent_id} with name: {name}")
+                return agent
+        
+        # Create new agent if not found
         self.mock_agent_counter += 1
         agent_id = f"mock_qa_agent_{self.mock_agent_counter}"
         
@@ -850,11 +866,18 @@ class MockAzureAIAgentService(AzureAIAgentService):
         })()
         
         self.agents[agent_id] = mock_agent
-        logger.info(f"Created mock QA agent: {agent_id}")
+        logger.info(f"Created new mock QA agent: {agent_id} with name: {name}")
         return mock_agent
     
     async def create_content_generator_agent(self, name: str, instructions: str, model_deployment: str = None) -> Agent:
-        """Mock content generator agent creation"""
+        """Mock content generator agent creation - reuses agents by name"""
+        # Check if agent with this name already exists
+        for agent_id, agent in self.agents.items():
+            if agent.name == name:
+                logger.info(f"Reusing existing mock content generator agent: {agent_id} with name: {name}")
+                return agent
+        
+        # Create new agent if not found
         self.mock_agent_counter += 1
         agent_id = f"mock_content_agent_{self.mock_agent_counter}"
         
@@ -867,7 +890,7 @@ class MockAzureAIAgentService(AzureAIAgentService):
         })()
         
         self.agents[agent_id] = mock_agent
-        logger.info(f"Created mock content generator agent: {agent_id}")
+        logger.info(f"Created new mock content generator agent: {agent_id} with name: {name}")
         return mock_agent
     
     async def create_thread(self, agent_id: str) -> str:

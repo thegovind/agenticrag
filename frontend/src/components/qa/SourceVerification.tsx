@@ -1,9 +1,9 @@
 import React from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { X, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
+import { CheckCircle, AlertTriangle, XCircle, X } from 'lucide-react';
 import { VerifiedSource } from './QAContainer';
 
 interface SourceVerificationProps {
@@ -63,7 +63,7 @@ export const SourceVerification: React.FC<SourceVerificationProps> = ({
   const unverifiedCount = verifiedSources.filter(s => s.verificationStatus === 'unverified').length;
 
   return (
-    <Card className="h-full flex flex-col">
+    <Card className="h-full max-h-[600px] flex flex-col">
       <CardHeader className="flex-shrink-0">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg">Source Verification</CardTitle>
@@ -98,8 +98,8 @@ export const SourceVerification: React.FC<SourceVerificationProps> = ({
       </CardHeader>
 
       <CardContent className="flex-1 overflow-hidden">
-        <ScrollArea className="h-full">
-          <div className="space-y-4">
+        <ScrollArea className="h-full scrollbar-enhanced">
+          <div className="space-y-4 pr-2">
             {verifiedSources.map((source) => (
               <div key={source.sourceId} className="border rounded-lg p-3 space-y-3">
                 <div className="flex items-start justify-between">
@@ -184,6 +184,7 @@ export const SourceVerification: React.FC<SourceVerificationProps> = ({
               </div>
             )}
           </div>
+          <ScrollBar />
         </ScrollArea>
       </CardContent>
     </Card>

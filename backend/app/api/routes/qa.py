@@ -38,7 +38,7 @@ async def ask_question(
         async with observability.trace_operation(
             "qa_processing",
             session_id=session_id,
-            model=request.chat_model.value,
+            model=request.chat_model,
             verification_level=request.verification_level
         ) as span:
             
@@ -72,8 +72,8 @@ async def ask_question(
                 verification_level=request.verification_level,
                 session_id=session_id,
                 model_config={
-                    "chat_model": request.chat_model.value,
-                    "embedding_model": request.embedding_model.value,
+                    "chat_model": request.chat_model,
+                    "embedding_model": request.embedding_model,
                     "temperature": request.temperature
                 }
             )
@@ -110,7 +110,7 @@ async def ask_question(
             }
             
             observability.track_tokens(
-                model=request.chat_model.value,
+                model=request.chat_model,
                 prompt_tokens=token_usage["prompt_tokens"],
                 completion_tokens=token_usage["completion_tokens"],
                 session_id=session_id
@@ -138,12 +138,12 @@ async def ask_question(
                 #     response=answer,
                 #     sources=sources,
                 #     session_id=session_id,
-                #     model_used=request.chat_model.value,
+                #     model_used=request.chat_model,
                 #     response_time=response_time,
                 #     financial_context={
                 #         "user_id": x_user_id,
                 #         "exercise_type": "qa",
-                #         "embedding_model": request.embedding_model.value,
+                #         "embedding_model": request.embedding_model,
                 #         "verification_level": request.verification_level
                 #     }
                 # )
@@ -175,8 +175,8 @@ async def ask_question(
                 verification_details=verification_details,
                 metadata={
                     "exercise_type": "qa",
-                    "model_used": request.chat_model.value,
-                    "embedding_model": request.embedding_model.value,
+                    "model_used": request.chat_model,
+                    "embedding_model": request.embedding_model,
                     "temperature": request.temperature,
                     "verification_level": request.verification_level,
                     "evaluation_count": len(evaluation_results),

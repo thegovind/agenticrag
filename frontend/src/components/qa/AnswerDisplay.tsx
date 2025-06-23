@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ExternalLink, Eye } from 'lucide-react';
 import { QAAnswer, QACitation } from './QAContainer';
 
 interface AnswerDisplayProps {
@@ -19,6 +20,21 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
   onVerifySources, 
   isVerifyingSources = false 
 }) => {
+  const [selectedCitation, setSelectedCitation] = useState<QACitation | null>(null);
+  const [showCitationModal, setShowCitationModal] = useState(false);
+
+  const handleViewCitation = (citation: QACitation) => {
+    setSelectedCitation(citation);
+    setShowCitationModal(true);
+  };
+  // Helper function to safely format credibility scores and avoid NaN
+  const formatCredibilityScore = (score: number | undefined): string => {
+    if (score === undefined || score === null || isNaN(score)) {
+      return '0';
+    }
+    return (score * 100).toFixed(0);
+  };
+
   const getConfidenceColor = (score: number) => {
     if (score >= 0.8) return 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800';
     if (score >= 0.6) return 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:border-yellow-800';
@@ -31,14 +47,15 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
     return 'Low Confidence';
   };
 
-  const getCredibilityColor = (score: number) => {
-    if (score >= 0.7) return 'text-green-600';
-    if (score >= 0.5) return 'text-yellow-600';
+  const getCredibilityColor = (score: number | undefined) => {
+    const safeScore = score || 0;
+    if (safeScore >= 0.7) return 'text-green-600';
+    if (safeScore >= 0.5) return 'text-yellow-600';
     return 'text-red-600';
   };
 
   const formatCitationContent = (citation: QACitation) => {
-    const maxLength = 150;
+    const maxLength = 200;
     return citation.content.length > maxLength 
       ? citation.content.substring(0, maxLength) + '...'
       : citation.content;
@@ -187,7 +204,7 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
             <div className="bg-muted/30 p-2 rounded">
               <span className="font-medium">Overall Credibility:</span>
               <span className={`ml-1 font-medium ${getCredibilityColor(answer.verificationDetails.overallCredibilityScore)}`}>
-                {(answer.verificationDetails.overallCredibilityScore * 100).toFixed(0)}%
+                {formatCredibilityScore(answer.verificationDetails.overallCredibilityScore)}%
               </span>
             </div>
             <div className="bg-muted/30 p-2 rounded">
@@ -206,52 +223,122 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
         </div>
 
         {answer.citations.length > 0 && (
-          <div className="space-y-2">
-            <h4 className="text-sm font-medium text-foreground">Citations</h4>
-            <ScrollArea className="h-32">
-              <div className="space-y-2">
-                {answer.citations.map((citation, index) => (
-                  <div key={citation.id} className="text-xs border rounded p-2 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-foreground">
-                        [{index + 1}] {citation.documentTitle}
-                      </span>
-                      <div className="flex items-center space-x-1">
-                        <Badge variant="outline" className="text-xs">
-                          {citation.confidence}
-                        </Badge>
-                        {citation.credibilityScore !== undefined && (
-                          <span className={`text-xs font-medium ${getCredibilityColor(citation.credibilityScore)}`}>
-                            {(citation.credibilityScore * 100).toFixed(0)}%
-                          </span>
-                        )}
+          <div className="space-y-3">
+            <h4 className="text-sm font-medium text-foreground text-left">Citations</h4>
+            <div className="space-y-3">
+              {answer.citations.map((citation, index) => (
+                <div key={citation.id} className="border rounded-lg p-3 space-y-2 bg-muted/20 text-left">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-medium text-foreground text-sm">
+                          [{index + 1}] {citation.documentTitle}
+                        </span>
+                        <div className="flex items-center space-x-1">
+                          <Badge variant="outline" className="text-xs">
+                            {citation.confidence}
+                          </Badge>
+                          {citation.credibilityScore !== undefined && (
+                            <span className={`text-xs font-medium ${getCredibilityColor(citation.credibilityScore)}`}>
+                              {formatCredibilityScore(citation.credibilityScore)}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-sm text-muted-foreground leading-relaxed text-left">
+                        {formatCitationContent(citation)}
+                      </div>
+                      <div className="flex items-center space-x-3 text-xs text-muted-foreground">
+                        <span>Source: {citation.source}</span>
+                        {citation.pageNumber && <span>Page: {citation.pageNumber}</span>}
+                        {citation.sectionTitle && <span>Section: {citation.sectionTitle}</span>}
                       </div>
                     </div>
-                    <div className="text-muted-foreground">
-                      {formatCitationContent(citation)}
-                    </div>
-                    <div className="flex items-center space-x-2 text-muted-foreground">
-                      <span>Source: {citation.source}</span>
-                      {citation.pageNumber && <span>Page: {citation.pageNumber}</span>}
-                      {citation.sectionTitle && <span>Section: {citation.sectionTitle}</span>}
-                    </div>
+                  </div>
+                  
+                  <div className="flex items-center space-x-2 pt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={() => handleViewCitation(citation)}
+                    >
+                      <Eye className="h-3 w-3 mr-1" />
+                      View Full Citation
+                    </Button>
                     {citation.url && (
-                      <a
-                        href={citation.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline text-xs"
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-7"
+                        onClick={() => window.open(citation.url, '_blank')}
                       >
-                        View Source
-                      </a>
+                        <ExternalLink className="h-3 w-3 mr-1" />
+                        Source Link
+                      </Button>
                     )}
                   </div>
-                ))}
-              </div>
-            </ScrollArea>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </CardContent>
+      
+      {/* Citation Details Modal */}
+      <Dialog open={showCitationModal} onOpenChange={setShowCitationModal}>
+        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="text-lg">Citation Details</DialogTitle>
+          </DialogHeader>
+          
+          {selectedCitation && (
+            <div className="space-y-4 flex-1 overflow-auto">
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <h3 className="font-semibold text-lg text-left">{selectedCitation.documentTitle}</h3>
+                  <Badge variant="outline" className="text-xs">
+                    {selectedCitation.confidence}
+                  </Badge>
+                  {selectedCitation.credibilityScore !== undefined && (
+                    <span className={`text-sm font-medium ${getCredibilityColor(selectedCitation.credibilityScore)}`}>
+                      {formatCredibilityScore(selectedCitation.credibilityScore)}% credible
+                    </span>
+                  )}
+                </div>
+                
+                <div className="flex items-center space-x-4 text-sm text-muted-foreground">
+                  <span>Source: {selectedCitation.source}</span>
+                  {selectedCitation.pageNumber && <span>Page: {selectedCitation.pageNumber}</span>}
+                  {selectedCitation.sectionTitle && <span>Section: {selectedCitation.sectionTitle}</span>}
+                </div>
+              </div>
+              
+              <Separator />
+              
+              <div className="space-y-2">
+                <h4 className="font-medium text-sm">Full Citation Content:</h4>
+                <div className="bg-muted/30 p-4 rounded-lg text-sm leading-relaxed text-left">
+                  {selectedCitation.content}
+                </div>
+              </div>
+              
+              {selectedCitation.url && (
+                <div className="pt-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => window.open(selectedCitation.url, '_blank')}
+                    className="w-full"
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Open Original Source
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 };

@@ -4,7 +4,7 @@ A comprehensive Retrieval Augmented Generation (RAG) system designed for financi
 
 ## Overview
 
-This project implements a complete RAG Financial POC with three interconnected use cases:
+This repo implements a complete RAG Financial POC with three interconnected use cases:
 
 1. **Context-Aware Content Generation**: RAG-based content generation with source citation
 2. **Agentic Question Answering**: Multi-source information retrieval with credibility verification
@@ -12,7 +12,7 @@ This project implements a complete RAG Financial POC with three interconnected u
 
 ## Key Features
 
-### 🧠 Adaptive Knowledge Base Management (Exercise 3)
+### 🧠 Adaptive Knowledge Base Management
 - **Information Acquisition**: Automated ingestion from multiple financial document sources
 - **Relevance Assessment**: AI-powered content evaluation and credibility scoring
 - **Knowledge Organization**: Hierarchical structuring with semantic relationships
@@ -112,63 +112,6 @@ The FastAPI backend provides comprehensive API documentation:
 - **ReDoc Documentation**: http://localhost:8000/redoc
 - **OpenAPI Schema**: http://localhost:8000/openapi.json
 
-### Key API Endpoints
-- `POST /api/v1/chat/completions` - Chat completions with RAG
-- `GET /api/v1/chat/models` - Available chat and embedding models
-- `POST /api/v1/documents/upload` - Document upload and processing
-- `GET /api/v1/admin/metrics` - Observability metrics
-- `GET /api/v1/knowledge-base/status` - Knowledge base health
-
-## Testing & Validation
-
-### Backend Integration Tests
-```bash
-cd backend
-python test_backend_integration.py      # Complete system integration
-python test_observability_evaluation.py # Observability framework
-python test_rag_pipeline.py            # RAG pipeline functionality
-```
-
-### Frontend Testing
-```bash
-cd frontend/rag-financial-frontend
-npm test                                # Unit tests
-npm run test:e2e                       # End-to-end tests
-```
-
-### Manual Testing Checklist
-- [ ] Chat interface responds to financial queries
-- [ ] Model selection (GPT-4, embeddings) works
-- [ ] Admin dashboard displays metrics
-- [ ] Document upload and processing
-- [ ] Citation links navigate to sources
-- [ ] Real-time metrics refresh
-
-## MCP & A2A Integration Patterns
-
-### Model Context Protocol (MCP)
-```python
-# Example MCP server integration
-from app.services.mcp_server import MCPServer
-
-mcp_server = MCPServer(port=3001)
-mcp_server.register_tool("financial_analysis", financial_analysis_tool)
-mcp_server.register_resource("market_data", market_data_resource)
-```
-
-### Agent-to-Agent (A2A) Communication
-```python
-# Example A2A workflow
-from app.services.multi_agent_orchestrator import MultiAgentOrchestrator
-
-orchestrator = MultiAgentOrchestrator()
-result = await orchestrator.coordinate_agents([
-    "document_processor",
-    "credibility_assessor", 
-    "knowledge_curator"
-])
-```
-
 ## Financial Document Processing
 
 ### Supported Document Types
@@ -183,26 +126,6 @@ result = await orchestrator.coordinate_agents([
 - **Financial Context**: Industry-specific chunk boundaries
 - **Overlap Management**: Intelligent chunk overlap for context preservation
 - **Metadata Enrichment**: Document type, section, and page number tracking
-
-## Deployment
-
-### Azure Deployment
-See `DEPLOYMENT_GUIDE.md` for step-by-step Azure deployment instructions including:
-- Resource group and service provisioning
-- Container Apps deployment
-- Networking and security configuration
-- Monitoring and alerting setup
-
-### Docker Deployment
-```bash
-# Backend
-docker build -t rag-financial-backend ./backend
-docker run -p 8000:8000 rag-financial-backend
-
-# Frontend
-docker build -t rag-financial-frontend ./frontend
-docker run -p 3000:80 rag-financial-frontend
-```
 
 ## Observability & Monitoring
 
@@ -219,74 +142,6 @@ docker run -p 3000:80 rag-financial-frontend
 - **Custom Spans**: Financial document processing workflows
 - **Performance Profiling**: Bottleneck identification and optimization
 
-## Project Structure
-
-```
-rag-financial-poc/
-├── backend/                           # Python FastAPI backend
-│   ├── app/
-│   │   ├── api/routes/               # API endpoint definitions
-│   │   │   ├── admin.py             # Admin dashboard endpoints
-│   │   │   ├── chat.py              # Chat completion endpoints
-│   │   │   ├── documents.py         # Document processing endpoints
-│   │   │   └── knowledge_base.py    # Knowledge base management
-│   │   ├── core/                    # Core functionality
-│   │   │   ├── config.py           # Configuration management
-│   │   │   ├── evaluation.py       # Evaluation framework
-│   │   │   └── observability.py    # Observability and metrics
-│   │   ├── models/                  # Pydantic data models
-│   │   │   └── schemas.py          # API request/response schemas
-│   │   └── services/               # Business logic services
-│   │       ├── azure_services.py   # Azure service integrations
-│   │       ├── document_processor.py # Document processing pipeline
-│   │       ├── knowledge_base_manager.py # Knowledge base operations
-│   │       ├── mcp_server.py       # MCP server implementation
-│   │       ├── multi_agent_orchestrator.py # Agent coordination
-│   │       └── rag_pipeline.py     # RAG processing pipeline
-│   ├── test_*.py                   # Integration and unit tests
-│   ├── requirements.txt            # Python dependencies
-│   └── .env.example               # Environment configuration template
-├── frontend/                       # React TypeScript frontend
-│   └── rag-financial-frontend/
-│       ├── src/
-│       │   ├── components/         # React components
-│       │   │   ├── admin/         # Admin dashboard components
-│       │   │   └── chat/          # Chat interface components
-│       │   ├── services/          # API service clients
-│       │   └── types/             # TypeScript type definitions
-│       ├── package.json           # Node.js dependencies
-│       └── .env.example          # Frontend environment template
-├── DEPLOYMENT_GUIDE.md            # Comprehensive deployment instructions
-├── azure-deployment-config.json   # Azure resource configuration
-├── API_DOCUMENTATION.md           # Detailed API reference
-├── MCP_A2A_INTEGRATION.md         # MCP and A2A patterns guide
-└── README.md                      # This file
-```
-
-## Success Criteria & KPIs
-
-### Exercise 3: Adaptive Knowledge Base Management
-- ✅ **Information Acquisition**: Automated document ingestion and processing
-- ✅ **Relevance Assessment**: AI-powered content evaluation with confidence scoring
-- ✅ **Knowledge Organization**: Hierarchical document structure with semantic indexing
-- ✅ **Conflict Resolution**: Intelligent handling of contradictory information
-- ✅ **Response Adaptation**: Dynamic knowledge base updates and query adaptation
-
-### Technical Requirements
-- ✅ **Azure Services Integration**: AI Foundry, OpenAI, Search, Cosmos DB, Document Intelligence
-- ✅ **Observability Framework**: Token tracking, evaluation metrics, distributed tracing
-- ✅ **MCP/A2A Implementation**: Multi-agent coordination and communication protocols
-- ✅ **Financial Document Focus**: 10-K/10-Q specialized processing and analysis
-- ✅ **Citation Management**: Comprehensive source tracking and navigation
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes with proper tests
-4. Ensure all tests pass (`python test_backend_integration.py`)
-5. Update documentation as needed
-6. Submit a pull request with detailed description
 
 ## Support & Documentation
 
@@ -299,8 +154,3 @@ rag-financial-poc/
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
----
-
-**Built for Ashish Talati (Microsoft) - RAG Financial POC**  
-*Devin Session: https://app.devin.ai/sessions/00a44a41101e43aa823ad015cb1fdd70*

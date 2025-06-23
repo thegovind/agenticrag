@@ -8,6 +8,7 @@ import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { Activity, MessageSquare, DollarSign, AlertTriangle, CheckCircle, XCircle, TrendingUp, Database, Cpu, HardDrive, Settings } from 'lucide-react';
+import { ModelConfiguration, ModelConfiguration as ModelConfigType } from './ModelConfiguration';
 
 interface MetricData {
   timestamp: string;
@@ -57,6 +58,7 @@ export const AdminDashboard: React.FC = () => {
   const [foundryModels, setFoundryModels] = useState<any[]>([]);
   const [foundryConnections, setFoundryConnections] = useState<any[]>([]);
   const [foundryProjectInfo, setFoundryProjectInfo] = useState<any>(null);
+  const [modelConfig, setModelConfig] = useState<ModelConfigType | null>(null);
   const [isLoadingFoundryData, setIsLoadingFoundryData] = useState(false);
 
   useEffect(() => {
@@ -275,12 +277,32 @@ export const AdminDashboard: React.FC = () => {
             <p className="text-xs text-muted-foreground">All systems operational</p>
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Model Configuration</CardTitle>
+            <Settings className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-sm space-y-1">
+              {modelConfig ? (
+                <>
+                  <div><strong>Chat:</strong> {modelConfig.chatModel}</div>
+                  <div><strong>Embedding:</strong> {modelConfig.embeddingModel}</div>
+                </>
+              ) : (
+                <div className="text-muted-foreground">Not configured</div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <Tabs defaultValue="token-usage" className="space-y-4">
         <TabsList>
           <TabsTrigger value="token-usage">Token Usage</TabsTrigger>
           <TabsTrigger value="evaluation">Evaluation Metrics</TabsTrigger>
+          <TabsTrigger value="model-config">Model Configuration</TabsTrigger>
           <TabsTrigger value="foundry">Azure AI Foundry</TabsTrigger>
           <TabsTrigger value="tracing">Distributed Tracing</TabsTrigger>
           <TabsTrigger value="system">System Metrics</TabsTrigger>
@@ -464,6 +486,13 @@ export const AdminDashboard: React.FC = () => {
               </Card>
             ))}
           </div>
+        </TabsContent>
+
+        <TabsContent value="model-config" className="space-y-4">
+          <ModelConfiguration 
+            onConfigurationChange={setModelConfig}
+            className="max-w-4xl"
+          />
         </TabsContent>
 
         <TabsContent value="foundry" className="space-y-4">
