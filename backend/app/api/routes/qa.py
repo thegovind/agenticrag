@@ -15,7 +15,8 @@ from app.models.schemas import (
     Citation
 )
 from app.core.observability import observability
-from app.core.evaluation import get_evaluation_framework
+# Temporarily disable evaluation due to package conflicts
+# from app.core.evaluation import get_evaluation_framework
 from app.services.multi_agent_orchestrator import MultiAgentOrchestrator, AgentType
 from app.services.azure_ai_agent_service import AzureAIAgentService
 from app.services.azure_services import AzureServiceManager
@@ -126,37 +127,38 @@ async def ask_question(
                 })
             
             evaluation_results = []
+            # Temporarily disable evaluation due to package conflicts
             try:
-                eval_framework = get_evaluation_framework()
-                evaluation_results = await eval_framework.evaluate_response(
-                    query=request.question,
-                    response=answer,
-                    sources=sources,
-                    session_id=session_id,
-                    model_used=request.chat_model.value,
-                    response_time=response_time,
-                    financial_context={
-                        "user_id": x_user_id,
-                        "exercise_type": "qa",
-                        "embedding_model": request.embedding_model.value,
-                        "verification_level": request.verification_level
-                    }
-                )
+                # eval_framework = get_evaluation_framework()
+                # evaluation_results = await eval_framework.evaluate_response(
+                #     query=request.question,
+                #     response=answer,
+                #     sources=sources,
+                #     session_id=session_id,
+                #     model_used=request.chat_model.value,
+                #     response_time=response_time,
+                #     financial_context={
+                #         "user_id": x_user_id,
+                #         "exercise_type": "qa",
+                #         "embedding_model": request.embedding_model.value,
+                #         "verification_level": request.verification_level
+                #     }
+                # )
                 
-                eval_data = [
-                    {
-                        "metric": result.metric,
-                        "score": result.score,
-                        "model_used": result.model_used,
-                        "reasoning": result.reasoning
-                    }
-                    for result in evaluation_results
-                ]
+                eval_data = []
+                # eval_data = [
+                #     {
+                #         "metric": result.metric,
+                #         "score": result.score,
+                #         "model_used": result.model_used,
+                #         "reasoning": result.reasoning
+                #     }
+                #     for result in evaluation_results
+                # ]
                 observability.track_evaluation_metrics(session_id, eval_data)
                 
                 span.set_attribute("evaluation.count", len(evaluation_results))
-                span.set_attribute("evaluation.avg_score", 
-                                 sum(r.score for r in evaluation_results) / len(evaluation_results) if evaluation_results else 0)
+                span.set_attribute("evaluation.avg_score", 0)
                 
             except Exception as e:
                 logger.warning(f"Evaluation failed for QA session {session_id}: {e}")

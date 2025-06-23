@@ -9,9 +9,11 @@ azure-ai-ml==1.12.0
 
 # Azure AI Services (evaluation will be done via OpenAI calls)
 azure-ai-generative==1.0.0b3
+azure-ai-projects>=1.0.0b2
+azure-ai-evaluation>=1.8.0
 
 # OpenAI and AI
-openai==1.12.0
+openai>=1.90.0
 semantic-kernel==0.9.6b1
 
 # FastAPI and Web
@@ -22,7 +24,7 @@ httpx==0.26.0
 
 # Data Processing
 pandas==2.2.0
-numpy==1.26.4
+numpy<2.0,>=1.24
 python-docx==1.1.0
 PyPDF2==3.0.1
 openpyxl==3.1.2
@@ -32,8 +34,10 @@ tiktoken==0.5.2
 psutil==5.9.8
 
 # Additional dependencies
-pydantic==2.6.1
+pydantic>=2.0,<2.7
 pydantic-settings==2.1.0
 python-dotenv==1.0.1
 aiofiles==23.2.1
 msal==1.25.0
+edgartools==2.27.0
+markdownify==0.12.1

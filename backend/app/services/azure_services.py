@@ -10,9 +10,23 @@ from azure.ai.projects.models import ConnectionType
 import asyncio
 import logging
 import os
-from typing import List, Dict, Any, Optional
+import platform
+from typing import List, Dict, Any, Optional, Union
+from datetime import datetime, date
+import hashlib
+import json
+from dataclasses import dataclass
+
+# Configure Windows event loop policy for Azure SDK compatibility
+if platform.system() == "Windows":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except Exception:
+        pass
+
 from app.core.config import settings
 from app.core import observability
+from app.services.azure_storage_manager import AzureStorageManager, MockStorageManager
 
 logger = logging.getLogger(__name__)
 
@@ -188,21 +202,13 @@ class AzureServiceManager:
         self.ai_foundry_client = None
         self.project_client = None
         self.credential = None
+        self.storage_manager = None
         
     async def initialize(self):
         """Initialize all Azure services"""
         try:
-            if settings.mock_azure_services or not all([
-                settings.AZURE_CLIENT_SECRET, 
-                settings.AZURE_TENANT_ID, 
-                settings.AZURE_CLIENT_ID,
-                settings.AZURE_SEARCH_SERVICE_NAME,
-                settings.AZURE_OPENAI_ENDPOINT,
-                settings.COSMOS_DB_ENDPOINT
-            ]):
-                logger.info("Using mock Azure services for local development")
-                self._initialize_mock_services()
-                return
+            # Force real Azure services - don't use mock services
+            logger.info("Initializing real Azure services...")
             
             if settings.AZURE_CLIENT_SECRET and settings.AZURE_TENANT_ID and settings.AZURE_CLIENT_ID:
                 self.credential = ClientSecretCredential(
@@ -215,15 +221,25 @@ class AzureServiceManager:
                 raise ValueError("SPN authentication required: AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET must be provided")
             
             search_endpoint = f"https://{settings.AZURE_SEARCH_SERVICE_NAME}.search.windows.net"
+            
+            # Use API key authentication if available, otherwise use Service Principal
+            if settings.AZURE_SEARCH_API_KEY:
+                from azure.core.credentials import AzureKeyCredential
+                search_credential = AzureKeyCredential(settings.AZURE_SEARCH_API_KEY)
+                logger.info("Using API key authentication for Azure Search")
+            else:
+                search_credential = self.credential
+                logger.info("Using Service Principal authentication for Azure Search")
+                
             self.search_client = SearchClient(
                 endpoint=search_endpoint,
                 index_name=settings.AZURE_SEARCH_INDEX_NAME,
-                credential=self.credential
+                credential=search_credential
             )
             
             self.search_index_client = SearchIndexClient(
                 endpoint=search_endpoint,
-                credential=self.credential
+                credential=search_credential
             )
             
             self.form_recognizer_client = DocumentAnalysisClient(
@@ -232,15 +248,14 @@ class AzureServiceManager:
             )
             
             self.cosmos_client = CosmosClient(
-                url=settings.COSMOS_DB_ENDPOINT,
+                url=settings.AZURE_COSMOS_ENDPOINT,
                 credential=self.credential
             )
-            
             if hasattr(settings, 'AZURE_AI_PROJECT_ENDPOINT') and settings.AZURE_AI_PROJECT_ENDPOINT:
                 self.project_client = AIProjectClient(
                     endpoint=settings.AZURE_AI_PROJECT_ENDPOINT,
-                    credential=self.credential,
-                    api_version="2024-07-01-preview"
+                    credential=DefaultAzureCredential()
+                    # Using default API version instead of specifying "latest"
                 )
                 self.ai_foundry_client = self.project_client  # For backward compatibility
                 logger.info("Azure AI Foundry project client initialized successfully")
@@ -249,20 +264,29 @@ class AzureServiceManager:
                 settings.AZURE_AI_FOUNDRY_RESOURCE_GROUP,
                 settings.AZURE_SUBSCRIPTION_ID
             ]):
-                self.project_client = AIProjectClient(
-                    credential=self.credential,
-                    subscription_id=settings.AZURE_SUBSCRIPTION_ID,
-                    resource_group_name=settings.AZURE_AI_FOUNDRY_RESOURCE_GROUP,
-                    project_name=settings.AZURE_AI_FOUNDRY_PROJECT_NAME
-                )
-                self.ai_foundry_client = self.project_client  # For backward compatibility
-                logger.info("Azure AI Foundry project client initialized via subscription")
+                # Azure AI Foundry project endpoint construction is complex and varies by region
+                # For now, skip AI Foundry initialization if direct endpoint is not provided
+                logger.info("Azure AI Foundry project settings found but direct endpoint not provided. Skipping AI Foundry initialization.")
+                logger.info("To use Azure AI Foundry, please provide AZURE_AI_PROJECT_ENDPOINT in .env")
+                self.project_client = None
+                self.ai_foundry_client = None
+            else:
+                logger.info("Azure AI Foundry configuration not found, skipping AI Foundry client initialization")
+                self.project_client = None
+                self.ai_foundry_client = None
             
             self.openai_client = AzureOpenAI(
                 azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
                 api_key=settings.AZURE_OPENAI_API_KEY,
-                api_version=settings.AZURE_OPENAI_API_VERSION
-            )
+                api_version=settings.AZURE_OPENAI_API_VERSION            )
+            
+            # Ensure search index exists
+            await self.ensure_search_index_exists()
+            
+            # Initialize Azure Storage Manager - commented out due to Windows event loop issue
+            # self.storage_manager = AzureStorageManager()
+            # await self.storage_manager.initialize()
+            # logger.info("Azure Storage Manager initialized")
             
             logger.info("Azure services initialized successfully")
             
@@ -270,7 +294,7 @@ class AzureServiceManager:
             logger.error(f"Failed to initialize Azure services: {e}")
             raise
     
-    def _initialize_mock_services(self):
+    async def _initialize_mock_services(self):
         """Initialize mock services for local development"""
         self.search_client = MockSearchClient()
         self.search_index_client = MockSearchIndexClient()
@@ -280,82 +304,190 @@ class AzureServiceManager:
         self.ai_foundry_client = MockAIFoundryClient()
         self.project_client = MockAIFoundryClient()  # Same mock for project client
         self.credential = None
+        
+        self.storage_manager = MockStorageManager()
+        await self.storage_manager.initialize()
+        
         logger.info("Mock Azure services initialized for local development")
     
     async def cleanup(self):
         """Cleanup resources"""
-        if self.cosmos_client:
-            self.cosmos_client.close()
-        logger.info("Azure services cleaned up")
+        try:
+            # Close all Azure clients that may have internal HTTP sessions
+            if hasattr(self, 'cosmos_client') and self.cosmos_client:
+                if hasattr(self.cosmos_client, 'close'):
+                    self.cosmos_client.close()
+                    
+            if hasattr(self, 'project_client') and self.project_client:
+                if hasattr(self.project_client, 'close'):
+                    await self.project_client.close()
+                elif hasattr(self.project_client, '_client') and hasattr(self.project_client._client, 'close'):
+                    await self.project_client._client.close()
+                    
+            if hasattr(self, 'ai_foundry_client') and self.ai_foundry_client:
+                if hasattr(self.ai_foundry_client, 'close'):
+                    await self.ai_foundry_client.close()
+                elif hasattr(self.ai_foundry_client, '_client') and hasattr(self.ai_foundry_client._client, 'close'):
+                    await self.ai_foundry_client._client.close()
+                    
+            if hasattr(self, 'openai_client') and self.openai_client:
+                if hasattr(self.openai_client, 'close'):
+                    await self.openai_client.close()
+                    
+            if hasattr(self, 'storage_manager') and self.storage_manager:
+                if hasattr(self.storage_manager, 'cleanup'):
+                    await self.storage_manager.cleanup()
+                    
+            logger.info("Azure services cleaned up")
+        except Exception as e:
+            logger.error(f"Error during Azure services cleanup: {e}")
+    
+    def _validate_azure_credentials(self) -> bool:
+        """Validate that all required Azure credentials are present"""
+        required_settings = [
+            'AZURE_CLIENT_SECRET',
+            'AZURE_TENANT_ID', 
+            'AZURE_CLIENT_ID',
+            'AZURE_SEARCH_SERVICE_NAME',
+            'AZURE_OPENAI_ENDPOINT',
+            'AZURE_COSMOS_ENDPOINT'        ]
+        
+        missing_settings = []
+        for setting in required_settings:
+            if not getattr(settings, setting, None):
+                missing_settings.append(setting)
+        
+        if missing_settings:
+            logger.warning(f"Missing Azure credentials: {', '.join(missing_settings)}")
+            return False
+            
+        return True
     
     def get_project_client(self) -> Optional[AIProjectClient]:
         """Get the Azure AI Foundry project client for agent services"""
         return self.project_client
-
+    
     async def create_search_index(self):
-        """Create the search index for financial documents"""
-        from azure.search.documents.indexes.models import (
-            SearchIndex, SearchField, SearchFieldDataType, SimpleField,
-            SearchableField, VectorSearch, HnswAlgorithmConfiguration,
-            VectorSearchProfile, SemanticConfiguration, SemanticSearch,
-            SemanticPrioritizedFields, SemanticField
-        )
-        
-        fields = [
-            SimpleField(name="id", type=SearchFieldDataType.String, key=True),
-            SearchableField(name="content", type=SearchFieldDataType.String),
-            SearchableField(name="title", type=SearchFieldDataType.String),
-            SimpleField(name="document_type", type=SearchFieldDataType.String, filterable=True),
-            SimpleField(name="company", type=SearchFieldDataType.String, filterable=True),
-            SimpleField(name="filing_date", type=SearchFieldDataType.DateTimeOffset, filterable=True),
-            SimpleField(name="chunk_index", type=SearchFieldDataType.Int32),
-            SimpleField(name="source_url", type=SearchFieldDataType.String),
-            SimpleField(name="credibility_score", type=SearchFieldDataType.Double, filterable=True),
-            SearchField(
-                name="content_vector",
-                type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
-                searchable=True,
-                vector_search_dimensions=1536,
-                vector_search_profile_name="default-vector-profile"
+        """
+        DEPRECATED: Use ensure_search_index_exists() instead.
+        This method is kept for backward compatibility but will call ensure_search_index_exists().
+        """
+        logger.warning("create_search_index() is deprecated. Use ensure_search_index_exists() instead.")
+        return await self.ensure_search_index_exists()
+
+    async def ensure_search_index_exists(self) -> bool:
+        """Ensure the search index exists, create it if it doesn't"""
+        try:
+            logger.info(f"Checking if search index '{settings.AZURE_SEARCH_INDEX_NAME}' exists")
+            
+            # Check if index exists
+            try:
+                index = self.search_index_client.get_index(settings.AZURE_SEARCH_INDEX_NAME)
+                logger.info(f"Search index '{settings.AZURE_SEARCH_INDEX_NAME}' already exists with {len(index.fields)} fields")
+                return True
+            except Exception as e:
+                logger.info(f"Search index '{settings.AZURE_SEARCH_INDEX_NAME}' does not exist, creating it. Error: {e}")
+                
+            # Create the index
+            from azure.search.documents.indexes.models import (
+                SearchIndex, SearchField, SearchFieldDataType, SimpleField, 
+                SearchableField, VectorSearch, HnswAlgorithmConfiguration,
+                VectorSearchProfile, SemanticConfiguration, SemanticPrioritizedFields,
+                SemanticField, SemanticSearch
             )
-        ]
-        
-        vector_search = VectorSearch(
-            algorithms=[
-                HnswAlgorithmConfiguration(name="default-hnsw-algorithm")
-            ],
-            profiles=[
-                VectorSearchProfile(
-                    name="default-vector-profile",
-                    algorithm_configuration_name="default-hnsw-algorithm"
+            fields = [
+                SimpleField(name="id", type=SearchFieldDataType.String, key=True),
+                SearchableField(name="content", type=SearchFieldDataType.String),
+                SearchableField(name="title", type=SearchFieldDataType.String),
+                SimpleField(name="document_id", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="source", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="chunk_id", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="document_type", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="company", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="filing_date", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="section_type", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="page_number", type=SearchFieldDataType.Int32, filterable=True),
+                SimpleField(name="credibility_score", type=SearchFieldDataType.Double, filterable=True),
+                SimpleField(name="processed_at", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="citation_info", type=SearchFieldDataType.String),                # SEC-specific fields from Edgar tools
+                SimpleField(name="ticker", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="cik", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="industry", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="sic", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="entity_type", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="form_type", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="accession_number", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="period_end_date", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="chunk_index", type=SearchFieldDataType.Int32, filterable=True),
+                SimpleField(name="content_type", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="chunk_method", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="file_size", type=SearchFieldDataType.Int64, filterable=True),
+                SimpleField(name="document_url", type=SearchFieldDataType.String),
+                SearchField(
+                    name="content_vector", 
+                    type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+                    searchable=True,
+                    vector_search_dimensions=1536,
+                    vector_search_profile_name="default-vector-profile"
                 )
             ]
-        )
-        
-        semantic_config = SemanticConfiguration(
-            name="default-semantic-config",
-            prioritized_fields=SemanticPrioritizedFields(
-                title_field=SemanticField(field_name="title"),
-                content_fields=[SemanticField(field_name="content")]
+            
+            # Configure vector search
+            vector_search = VectorSearch(
+                algorithms=[
+                    HnswAlgorithmConfiguration(
+                        name="default-hnsw",
+                        parameters={
+                            "m": 4,
+                            "efConstruction": 400,
+                            "efSearch": 500,
+                            "metric": "cosine"
+                        }
+                    )
+                ],
+                profiles=[
+                    VectorSearchProfile(
+                        name="default-vector-profile",
+                        algorithm_configuration_name="default-hnsw"
+                    )
+                ]
             )
-        )
-        
-        semantic_search = SemanticSearch(configurations=[semantic_config])
-        
-        index = SearchIndex(
-            name=settings.AZURE_SEARCH_INDEX_NAME,
-            fields=fields,
-            vector_search=vector_search,
-            semantic_search=semantic_search
-        )
-        
-        try:
-            result = self.search_index_client.create_or_update_index(index)
-            logger.info(f"Search index '{settings.AZURE_SEARCH_INDEX_NAME}' created/updated successfully")
-            return result
+              # Configure semantic search with SEC-specific fields
+            semantic_config = SemanticConfiguration(
+                name="default-semantic-config",
+                prioritized_fields=SemanticPrioritizedFields(
+                    title_field=SemanticField(field_name="title"),
+                    content_fields=[
+                        SemanticField(field_name="content"),
+                        SemanticField(field_name="section_type")
+                    ],                    keywords_fields=[
+                        SemanticField(field_name="ticker"),
+                        SemanticField(field_name="company"),
+                        SemanticField(field_name="form_type"),
+                        SemanticField(field_name="document_type"),
+                        SemanticField(field_name="industry"),
+                        SemanticField(field_name="entity_type")
+                    ]
+                )
+            )
+            
+            semantic_search = SemanticSearch(configurations=[semantic_config])
+            
+            # Create the index
+            index = SearchIndex(
+                name=settings.AZURE_SEARCH_INDEX_NAME,
+                fields=fields,
+                vector_search=vector_search,
+                semantic_search=semantic_search
+            )
+            
+            result = self.search_index_client.create_index(index)
+            logger.info(f"Successfully created search index '{settings.AZURE_SEARCH_INDEX_NAME}'")
+            return True
+            
         except Exception as e:
-            logger.error(f"Failed to create search index: {e}")
-            raise
+            logger.error(f"Failed to ensure search index exists: {e}")
+            return False
 
     async def get_embedding(self, text: str, model: str = "text-embedding-ada-002") -> List[float]:
         """Get embedding for text using Azure OpenAI"""
@@ -369,11 +501,10 @@ class AzureServiceManager:
             logger.error(f"Failed to get embedding: {e}")
             raise
 
-    async def hybrid_search(self, query: str, top_k: int = 10, filters: str = None) -> List[Dict]:
+    async def hybrid_search(self, query: str, top_k: int = 10, filters: str = None, min_score: float = 0.0) -> List[Dict]:
         """Perform hybrid search (vector + keyword) on the knowledge base"""
         try:
             query_vector = await self.get_embedding(query)
-            
             vector_query = VectorizedQuery(
                 vector=query_vector,
                 k_nearest_neighbors=top_k,
@@ -382,39 +513,94 @@ class AzureServiceManager:
             
             results = self.search_client.search(
                 search_text=query,
-                vector_queries=[vector_query],
-                select=["id", "content", "title", "document_type", "company", 
-                       "filing_date", "source_url", "credibility_score"],
+                vector_queries=[vector_query],                select=["id", "content", "title", "document_id", "source", "chunk_id", 
+                       "document_type", "company", "filing_date", "section_type", 
+                       "page_number", "credibility_score", "processed_at", "citation_info",
+                       "ticker", "cik", "form_type", "accession_number", "industry", 
+                       "document_url", "sic", "entity_type", "period_end_date", 
+                       "chunk_index", "content_type", "chunk_method", "file_size"],
                 filter=filters,
                 top=top_k,
                 query_type="semantic",
                 semantic_configuration_name="default-semantic-config"
             )
             
-            return [dict(result) for result in results]
+            # Filter results byS minimum score if specix`fied
+            filtered_results = []
+            for result in results:
+                result_dict = dict(result)
+                score = getattr(result, '@search.score', 0.0)
+                if score >= min_score:
+                    result_dict['search_score'] = score
+                    filtered_results.append(result_dict)
             
+            return filtered_results            
         except Exception as e:
             logger.error(f"Hybrid search failed: {e}")
-            raise
-
+            raise    
+            
     async def add_documents_to_index(self, documents: List[Dict]) -> bool:
         """Add or update documents in the search index"""
         try:
-            result = self.search_client.upload_documents(documents)
-            logger.info(f"Uploaded {len(documents)} documents to search index")
+            logger.info(f"Starting add_documents_to_index with {len(documents)} documents")
+            
+            # with observability.trace_operation("azure_add_documents_to_index") as span:
+            #     span.set_attribute("documents_count", len(documents))
+            
+            validated_documents = []
+            for doc in documents:
+                if self._validate_document_schema(doc):
+                    validated_documents.append(doc)
+                else:
+                    logger.warning(f"Skipping invalid document: {doc.get('id', 'unknown')}")
+            if not validated_documents:
+                logger.error("No valid documents to upload after validation")
+                return False
+                
+            logger.info(f"Validated {len(validated_documents)} documents, uploading to search index")
+            result = self.search_client.upload_documents(validated_documents)
+            logger.info(f"Search client upload_documents result: {result}")
+            
+            #     span.set_attribute("uploaded_count", len(validated_documents))
+            #     span.set_attribute("success", True)            logger.info(f"Successfully uploaded {len(validated_documents)} documents to search index")
+            # observability.track_kb_update("search_index", len(validated_documents), 0)  # Method not available
+            
             return True
+                
         except Exception as e:
             logger.error(f"Failed to add documents to index: {e}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception details: {str(e)}")
+            observability.record_error("azure_add_documents_error", str(e))
             return False
-
-    async def analyze_document(self, document_content: bytes, content_type: str) -> Dict:
-        """Analyze document using Azure Document Intelligence"""
+    
+    def _validate_document_schema(self, document: Dict) -> bool:
+        """Validate document schema before uploading to search index"""
+        required_fields = ['id', 'content']
+        for field in required_fields:
+            if field not in document or not document[field]:
+                logger.warning(f"Document missing required field: {field}")
+                return False
+        
+        if len(document['content']) > 1000000:  # 1MB limit
+            logger.warning(f"Document content too large: {len(document['content'])} characters")
+            return False
+            
+        return True
+        
+    async def analyze_document(self, document_content: bytes, content_type: str, filename: str = None) -> Dict:
+        """Analyze document using Azure Document Intelligence with enhanced financial document processing"""
         try:
-            if content_type == "application/pdf":
-                model_id = "prebuilt-layout"
-            else:
-                model_id = "prebuilt-document"
-                
+            # with observability.trace_operation("azure_analyze_document") as span:
+            #     span.set_attribute("content_type", content_type)
+            #     span.set_attribute("content_size", len(document_content))
+            #     span.set_attribute("filename", filename or "unknown")
+            
+            model_id = self._select_document_model(content_type, filename)
+            #     span.set_attribute("model_id", model_id)
+            
+            logger.info(f"Analyzing document with model {model_id}, size: {len(document_content)} bytes")
+            
             poller = self.form_recognizer_client.begin_analyze_document(
                 model_id=model_id,
                 document=document_content
@@ -425,36 +611,146 @@ class AzureServiceManager:
                 "content": result.content,
                 "tables": [],
                 "key_value_pairs": {},
-                "pages": len(result.pages) if result.pages else 0
+                "pages": len(result.pages) if result.pages else 0,
+                "financial_sections": [],
+                "metadata": {
+                    "model_used": model_id,
+                    "confidence_scores": {},
+                    "processing_time": None
+                }
             }
             
             if result.tables:
-                for table in result.tables:
-                    table_data = []
+                for i, table in enumerate(result.tables):
+                    table_data = {
+                        "table_id": i,
+                        "cells": [],
+                        "financial_context": self._identify_financial_table_context(table)
+                    }
+                    
                     for cell in table.cells:
-                        table_data.append({
+                        table_data["cells"].append({
                             "content": cell.content,
                             "row_index": cell.row_index,
-                            "column_index": cell.column_index
+                            "column_index": cell.column_index,
+                            "confidence": getattr(cell, 'confidence', 0.0)
                         })
+                    
                     extracted_content["tables"].append(table_data)
             
             if result.key_value_pairs:
                 for kv_pair in result.key_value_pairs:
                     if kv_pair.key and kv_pair.value:
-                        extracted_content["key_value_pairs"][kv_pair.key.content] = kv_pair.value.content
+                        key_content = kv_pair.key.content
+                        value_content = kv_pair.value.content
+                        
+                        extracted_content["key_value_pairs"][key_content] = {
+                            "value": value_content,
+                            "confidence": getattr(kv_pair, 'confidence', 0.0),
+                            "financial_relevance": self._score_financial_relevance(key_content, value_content)
+                        }
+            
+            extracted_content["financial_sections"] = self._identify_financial_sections(result.content, filename)
+            
+            #     span.set_attribute("pages_processed", extracted_content["pages"])
+            #     span.set_attribute("tables_found", len(extracted_content["tables"]))
+            #     span.set_attribute("kv_pairs_found", len(extracted_content["key_value_pairs"]))
+            #     span.set_attribute("success", True)
+            
+            logger.info(f"Document analysis completed: {extracted_content['pages']} pages, {len(extracted_content['tables'])} tables")
             
             return extracted_content
-            
+                
         except Exception as e:
             logger.error(f"Document analysis failed: {e}")
+            observability.record_error("azure_document_analysis_error", str(e))
             raise
+    
+    def _select_document_model(self, content_type: str, filename: str = None) -> str:
+        """Select appropriate Document Intelligence model based on content type and filename"""
+        if filename:
+            filename_lower = filename.lower()
+            if any(term in filename_lower for term in ['10-k', '10k', '10-q', '10q', 'annual', 'quarterly']):
+                return "prebuilt-layout"  # Best for structured financial documents
+        
+        if content_type == "application/pdf":
+            return "prebuilt-layout"
+        elif content_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"]:
+            return "prebuilt-document"
+        else:
+            return "prebuilt-document"
+    
+    def _identify_financial_table_context(self, table) -> str:
+        """Identify the financial context of a table based on its content"""
+        sample_content = ""
+        cell_count = 0
+        
+        for cell in table.cells:
+            if cell_count >= 10:  # Sample first 10 cells
+                break
+            sample_content += cell.content.lower() + " "
+            cell_count += 1
+        
+        financial_keywords = {
+            "income_statement": ["revenue", "income", "expense", "profit", "loss", "earnings"],
+            "balance_sheet": ["assets", "liabilities", "equity", "cash", "inventory", "debt"],
+            "cash_flow": ["cash flow", "operating", "investing", "financing", "cash"],
+            "financial_ratios": ["ratio", "margin", "return", "percentage", "%"]
+        }
+        
+        for context, keywords in financial_keywords.items():
+            if any(keyword in sample_content for keyword in keywords):
+                return context
+        
+        return "general"
+    
+    def _score_financial_relevance(self, key: str, value: str) -> float:
+        """Score the financial relevance of a key-value pair"""
+        financial_terms = [
+            "revenue", "income", "profit", "loss", "assets", "liabilities", "equity",
+            "cash", "debt", "earnings", "dividend", "share", "stock", "market",
+            "financial", "fiscal", "quarter", "annual", "year", "period"
+        ]
+        
+        combined_text = (key + " " + value).lower()
+        matches = sum(1 for term in financial_terms if term in combined_text)
+        
+        return min(matches / len(financial_terms), 1.0)
+    
+    def _identify_financial_sections(self, content: str, filename: str = None) -> List[Dict]:
+        """Identify financial document sections in the content"""
+        sections = []
+        content_lower = content.lower()
+        
+        section_patterns = {
+            "executive_summary": ["executive summary", "management discussion", "md&a"],
+            "financial_statements": ["financial statements", "consolidated statements"],
+            "income_statement": ["income statement", "statement of operations", "profit and loss"],
+            "balance_sheet": ["balance sheet", "statement of financial position"],
+            "cash_flow": ["cash flow statement", "statement of cash flows"],
+            "notes": ["notes to financial statements", "footnotes"],
+            "risk_factors": ["risk factors", "risks and uncertainties"]
+        }
+        
+        for section_type, patterns in section_patterns.items():
+            for pattern in patterns:
+                if pattern in content_lower:
+                    position = content_lower.find(pattern)
+                    sections.append({
+                        "type": section_type,
+                        "pattern": pattern,
+                        "position": position,
+                        "confidence": 0.8  # Base confidence for pattern matching
+                    })
+                    break
+        
+        return sections
 
     async def save_session_history(self, session_id: str, message: Dict) -> bool:
         """Save chat session history to CosmosDB"""
         try:
-            database = self.cosmos_client.get_database_client(settings.COSMOS_DB_DATABASE_NAME)
-            container = database.get_container_client(settings.COSMOS_DB_CONTAINER_NAME)
+            database = self.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
+            container = database.get_container_client(settings.AZURE_COSMOS_CONTAINER_NAME)
             
             try:
                 session_doc = container.read_item(item=session_id, partition_key=session_id)
@@ -480,11 +776,21 @@ class AzureServiceManager:
     async def get_session_history(self, session_id: str) -> List[Dict]:
         """Retrieve chat session history from CosmosDB"""
         try:
-            database = self.cosmos_client.get_database_client(settings.COSMOS_DB_DATABASE_NAME)
-            container = database.get_container_client(settings.COSMOS_DB_CONTAINER_NAME)
+            database = self.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
+            container = database.get_container_client(settings.AZURE_COSMOS_CONTAINER_NAME)
             
-            session_doc = container.read_item(item=session_id, partition_key=session_id)
-            return session_doc.get("messages", [])
+            try:
+                session_doc = container.read_item(item=session_id, partition_key=session_id)
+                return session_doc.get("messages", [])
+            except Exception as e:
+                # Session doesn't exist yet, return empty history
+                if "NotFound" in str(e) or "does not exist" in str(e):
+                    logger.info(f"Session {session_id} not found, returning empty history")
+                    return []
+                else:
+                    # Some other error occurred
+                    logger.error(f"Failed to retrieve session history: {e}")
+                    return []
             
         except Exception as e:
             logger.error(f"Failed to retrieve session history: {e}")
@@ -493,10 +799,10 @@ class AzureServiceManager:
     async def get_available_models(self) -> List[Dict[str, Any]]:
         """Retrieve available model deployments from Azure AI Foundry project"""
         try:
-            with observability.trace_operation("azure_get_available_models") as span:
+            # with observability.trace_operation("azure_get_available_models") as span:
                 if not self.project_client:
                     logger.warning("Project client not initialized, returning mock models")
-                    span.set_attribute("using_mock", True)
+            # span.set_attribute("using_mock", True)
                     return self._get_mock_models()
                 
                 connections = await self._get_project_connections_internal()
@@ -511,11 +817,12 @@ class AzureServiceManager:
                             logger.error(f"Failed to get models from connection {connection.get('name')}: {e}")
                 
                 if not models:
-                    logger.warning("No models found from project connections, returning mock models")
-                    models = self._get_mock_models()
+                    logger.warning("No models found from project connections, using direct Azure OpenAI configuration")
+                    # Fallback to using direct Azure OpenAI configuration
+                    models = self._get_models_from_direct_config()
                 
-                span.set_attribute("models_count", len(models))
-                span.set_attribute("success", True)
+            # span.set_attribute("models_count", len(models))
+            # span.set_attribute("success", True)
                 return models
                 
         except Exception as e:
@@ -605,10 +912,10 @@ class AzureServiceManager:
     async def get_project_connections(self) -> List[Dict[str, Any]]:
         """Retrieve project connections from Azure AI Foundry"""
         try:
-            with observability.trace_operation("azure_get_project_connections") as span:
+            # with observability.trace_operation("azure_get_project_connections") as span:
                 connections = await self._get_project_connections_internal()
-                span.set_attribute("connections_count", len(connections))
-                span.set_attribute("success", True)
+            # span.set_attribute("connections_count", len(connections))
+            # span.set_attribute("success", True)
                 return connections
         except Exception as e:
             logger.error(f"Failed to retrieve project connections: {e}")
@@ -661,9 +968,9 @@ class AzureServiceManager:
     async def get_project_info(self) -> Dict[str, Any]:
         """Get Azure AI Foundry project information"""
         try:
-            with observability.trace_operation("azure_get_project_info") as span:
+            # with observability.trace_operation("azure_get_project_info") as span:
                 if not self.project_client:
-                    span.set_attribute("using_mock", True)
+            # span.set_attribute("using_mock", True)
                     return {
                         "project_name": "mock-project",
                         "resource_group": "mock-rg",
@@ -697,9 +1004,9 @@ class AzureServiceManager:
                         "models_count": 0
                     })
                 
-                span.set_attribute("project_name", project_info["project_name"])
-                span.set_attribute("connections_count", project_info.get("connections_count", 0))
-                span.set_attribute("success", True)
+            # span.set_attribute("project_name", project_info["project_name"])
+            # span.set_attribute("connections_count", project_info.get("connections_count", 0))
+            # span.set_attribute("success", True)
                 
                 return project_info
                 
@@ -707,3 +1014,124 @@ class AzureServiceManager:
             logger.error(f"Failed to get project info: {e}")
             observability.record_error("azure_get_project_info_error", str(e))
             return {"error": str(e), "status": "error"}
+    
+    def _get_models_from_direct_config(self) -> List[Dict[str, Any]]:
+        """Get models from direct Azure OpenAI configuration as fallback"""
+        models = []
+        
+        if settings.AZURE_OPENAI_ENDPOINT and settings.AZURE_OPENAI_API_KEY:
+            # Add the configured chat model
+            if settings.AZURE_OPENAI_DEPLOYMENT_NAME:
+                models.append({
+                    "id": settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+                    "name": settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+                    "type": "chat",
+                    "status": "active",
+                    "provider": "Azure OpenAI (Direct Config)",
+                    "capabilities": ["chat", "completion"],
+                    "endpoint": settings.AZURE_OPENAI_ENDPOINT
+                })
+            
+            # Add the configured embedding model
+            if settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME:
+                models.append({
+                    "id": settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME,
+                    "name": settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME,
+                    "type": "embedding",
+                    "status": "active",
+                    "provider": "Azure OpenAI (Direct Config)",
+                    "capabilities": ["embedding"],
+                    "endpoint": settings.AZURE_OPENAI_ENDPOINT
+                })
+        
+        if not models:
+            logger.warning("No Azure OpenAI configuration found, returning mock models")
+            return self._get_mock_models()
+            
+        logger.info(f"Found {len(models)} models from direct Azure OpenAI configuration")
+        return models
+
+    async def recreate_search_index(self, force: bool = False) -> bool:
+        """
+        Force recreate the search index with the latest schema.
+        This will delete the existing index and create a new one.
+        Use with caution as this will delete all existing data.
+        
+        Args:
+            force: If True, will delete existing index without checking
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not force:
+                logger.warning("recreate_search_index() will DELETE all existing data. Call with force=True to proceed.")
+                return False
+                
+            logger.info(f"Force recreating search index '{settings.AZURE_SEARCH_INDEX_NAME}'")
+            
+            # Delete existing index if it exists
+            try:
+                self.search_index_client.delete_index(settings.AZURE_SEARCH_INDEX_NAME)
+                logger.info(f"Deleted existing index '{settings.AZURE_SEARCH_INDEX_NAME}'")
+            except Exception as e:
+                logger.info(f"No existing index to delete: {e}")
+            
+            # Create fresh index using ensure_search_index_exists
+            return await self.ensure_search_index_exists()
+            
+        except Exception as e:
+            logger.error(f"Failed to recreate search index: {e}")
+            return False
+
+    async def upload_document_to_storage(self, content: bytes, filename: str, document_id: str) -> str:
+        """Upload document to Azure Storage and return the URL"""
+        try:
+            logger.info(f"Uploading document {document_id} ({filename}) to Azure Storage...")
+              # Use the existing storage manager
+            if hasattr(self, 'storage_manager') and self.storage_manager:
+                blob_name = f"{document_id}/{filename}"
+                storage_result = await self.storage_manager.upload_document(
+                    file_content=content,
+                    filename=blob_name,
+                    content_type="application/pdf"  # Default to PDF, could be made dynamic
+                )
+                storage_url = storage_result.get('url', storage_result.get('blob_url'))
+                logger.info(f"Document uploaded to storage successfully: {storage_url}")
+                return storage_url
+            else:
+                logger.warning("Storage manager not available, skipping storage upload")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to upload document to storage: {e}")
+            raise
+
+    async def check_document_exists(self, accession_number: str) -> bool:
+        """Check if a document with the given accession number already exists in the search index"""
+        try:
+            logger.info(f"Checking if document exists in index: {accession_number}")
+            
+            # Search for documents with the specific accession number
+            results = self.search_client.search(
+                search_text="*",
+                filter=f"accession_number eq '{accession_number}'",
+                select=["id", "accession_number"],
+                top=1
+            )
+            
+            # Convert results to list to check if any documents exist
+            documents = list(results)
+            exists = len(documents) > 0
+            
+            if exists:
+                logger.info(f"Document with accession number {accession_number} already exists in index")
+            else:
+                logger.info(f"Document with accession number {accession_number} not found in index")
+                
+            return exists
+            
+        except Exception as e:
+            logger.error(f"Error checking if document exists: {e}")
+            # In case of error, assume document doesn't exist to allow processing
+            return False

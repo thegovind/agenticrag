@@ -355,9 +355,9 @@ class QAAgent(FinancialAgent):
         verification_level = request.get("verification_level", "thorough")
         
         try:
-            with observability.trace_operation("qa_agent_answer_question") as span:
-                span.set_attribute("question", question[:100])
-                span.set_attribute("verification_level", verification_level)
+            # with observability.trace_operation("qa_agent_answer_question") as span:
+            # span.set_attribute("question", question[:100])
+            # span.set_attribute("verification_level", verification_level)
                 
                 await self._ensure_qa_agent_initialized()
                 
@@ -421,10 +421,10 @@ class QAAgent(FinancialAgent):
                         "credibility_score": 0.9
                     })
                 
-                span.set_attribute("answer_length", len(answer))
-                span.set_attribute("sources_count", len(combined_sources))
-                span.set_attribute("confidence", confidence)
-                span.set_attribute("success", True)
+            # span.set_attribute("answer_length", len(answer))
+            # span.set_attribute("sources_count", len(combined_sources))
+            # span.set_attribute("confidence", confidence)
+            # span.set_attribute("success", True)
                 
                 return {
                     "answer": answer,
@@ -454,8 +454,8 @@ class QAAgent(FinancialAgent):
         question = request["question"]
         
         try:
-            with observability.trace_operation("qa_agent_decompose_question") as span:
-                span.set_attribute("question", question[:100])
+            # with observability.trace_operation("qa_agent_decompose_question") as span:
+            # span.set_attribute("question", question[:100])
                 
                 await self._ensure_qa_agent_initialized()
                 
@@ -523,9 +523,9 @@ class QAAgent(FinancialAgent):
                 
                 strategy_response = strategy_result.response
                 
-                span.set_attribute("sub_questions_count", len(sub_questions))
-                span.set_attribute("strategy_length", len(strategy_response))
-                span.set_attribute("success", True)
+            # span.set_attribute("sub_questions_count", len(sub_questions))
+            # span.set_attribute("strategy_length", len(strategy_response))
+            # span.set_attribute("success", True)
                 
                 return {
                     "sub_questions": sub_questions,
@@ -586,8 +586,8 @@ class QAAgent(FinancialAgent):
         sources = request["sources"]
         
         try:
-            with observability.trace_operation("qa_agent_verify_sources") as span:
-                span.set_attribute("sources_count", len(sources))
+            # with observability.trace_operation("qa_agent_verify_sources") as span:
+            # span.set_attribute("sources_count", len(sources))
                 
                 await self._ensure_qa_agent_initialized()
                 
@@ -657,9 +657,9 @@ class QAAgent(FinancialAgent):
                 verification_report["verification_method"] = "Azure AI Agent Service + Internal Analysis"
                 verification_report["total_sources_analyzed"] = len(sources)
                 
-                span.set_attribute("verification_completed", True)
-                span.set_attribute("agent_analysis_length", len(verification_response))
-                span.set_attribute("success", True)
+            # span.set_attribute("verification_completed", True)
+            # span.set_attribute("agent_analysis_length", len(verification_response))
+            # span.set_attribute("success", True)
                 
                 return {
                     "credibility_scores": credibility_scores,

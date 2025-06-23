@@ -7,11 +7,29 @@ import logging
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
+# Set up logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Set specific loggers to appropriate levels
+logging.getLogger("app").setLevel(logging.INFO)
+logging.getLogger("azure").setLevel(logging.INFO)
+logging.getLogger("uvicorn").setLevel(logging.INFO)
+logging.getLogger("fastapi").setLevel(logging.INFO)
+
+# Reduce noise from some verbose Azure libraries
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+logging.getLogger("azure.identity").setLevel(logging.WARNING)
+
 from app.core.config import settings
-from app.api.routes import knowledge_base, chat, admin, documents, qa
+from app.api.routes import knowledge_base, chat, admin, documents, qa, sec_documents
 from app.services.azure_services import AzureServiceManager
 from app.core.observability import observability, setup_fastapi_instrumentation
-from app.core.evaluation import setup_evaluation_framework
+# Temporarily disable evaluation due to package conflicts
+# from app.core.evaluation import setup_evaluation_framework
 
 load_dotenv()
 
@@ -21,17 +39,19 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger(__name__)
     logger.info("Starting RAG Financial Assistant API")
     
+    azure_manager = None
     try:
         azure_manager = AzureServiceManager()
         await azure_manager.initialize()
         app.state.azure_manager = azure_manager
         
         if hasattr(azure_manager, 'openai_client'):
-            setup_evaluation_framework(
-                azure_openai_client=azure_manager.openai_client,
-                cosmos_client=getattr(azure_manager, 'cosmos_client', None)
-            )
-            logger.info("Evaluation framework initialized")
+            # Temporarily disable evaluation due to package conflicts
+            # setup_evaluation_framework(
+            #     azure_openai_client=azure_manager.openai_client,
+            #     cosmos_client=getattr(azure_manager, 'cosmos_client', None)
+            # )
+            logger.info("Evaluation framework disabled due to package conflicts")
         
         logger.info("Azure services initialized successfully")
     except Exception as e:
@@ -40,7 +60,11 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("Shutting down RAG Financial Assistant API")
-    await azure_manager.cleanup()
+    if azure_manager:
+        try:
+            await azure_manager.cleanup()
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
 
 application = FastAPI(
     title="RAG Financial POC - Adaptive Knowledge Base",
@@ -128,6 +152,7 @@ application.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
 application.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 application.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
 application.include_router(qa.router, prefix="/api/v1/qa", tags=["QA"])
+application.include_router(sec_documents.router, tags=["SEC Documents"])
 
 @application.get("/")
 async def root():

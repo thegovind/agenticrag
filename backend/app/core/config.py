@@ -9,14 +9,15 @@ class Settings(BaseSettings):
     
     AZURE_SEARCH_SERVICE_NAME: str = os.getenv("AZURE_SEARCH_SERVICE_NAME", "")
     AZURE_SEARCH_INDEX_NAME: str = os.getenv("AZURE_SEARCH_INDEX_NAME", "financial-documents")
-    azure_search_api_version: str = os.getenv("AZURE_SEARCH_API_VERSION", "2023-11-01")
+    AZURE_SEARCH_API_VERSION: str = os.getenv("AZURE_SEARCH_API_VERSION", "2023-11-01")
+    AZURE_SEARCH_API_KEY: str = os.getenv("AZURE_SEARCH_API_KEY", "")
     
     AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     AZURE_OPENAI_API_KEY: str = os.getenv("AZURE_OPENAI_API_KEY", "")
     AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
-    azure_openai_chat_deployment_name: str = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME", "gpt-4")
-    azure_openai_embedding_deployment_name: str = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME", "text-embedding-ada-002")
-    azure_openai_deployment_name: str = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4")
+    AZURE_OPENAI_CHAT_DEPLOYMENT_NAME: str = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME", "gpt-4")
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME: str = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME", "text-embedding-ada-002")
+    AZURE_OPENAI_DEPLOYMENT_NAME: str = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4")
     
     AVAILABLE_EMBEDDING_MODELS: List[str] = [
         "text-embedding-ada-002",
@@ -32,16 +33,12 @@ class Settings(BaseSettings):
         "deepseek-chat"
     ]
     
-    COSMOS_DB_ENDPOINT: str = os.getenv("COSMOS_DB_ENDPOINT", "")
-    COSMOS_DB_DATABASE_NAME: str = os.getenv("COSMOS_DB_DATABASE_NAME", "rag-financial")
-    COSMOS_DB_CONTAINER_NAME: str = os.getenv("COSMOS_DB_CONTAINER_NAME", "sessions")
-    azure_cosmos_endpoint: str = os.getenv("AZURE_COSMOS_ENDPOINT", "")
-    azure_cosmos_database_name: str = os.getenv("AZURE_COSMOS_DATABASE_NAME", "rag-financial-db")
-    azure_cosmos_container_name: str = os.getenv("AZURE_COSMOS_CONTAINER_NAME", "chat-sessions")
-    azure_cosmos_evaluation_container_name: str = os.getenv("AZURE_COSMOS_EVALUATION_CONTAINER_NAME", "evaluation-results")
+    AZURE_COSMOS_ENDPOINT: str = os.getenv("AZURE_COSMOS_ENDPOINT", "")
+    AZURE_COSMOS_DATABASE_NAME: str = os.getenv("AZURE_COSMOS_DATABASE_NAME", "rag-financial-db")
+    AZURE_COSMOS_CONTAINER_NAME: str = os.getenv("AZURE_COSMOS_CONTAINER_NAME", "chat-sessions")
+    AZURE_COSMOS_EVALUATION_CONTAINER_NAME: str = os.getenv("AZURE_COSMOS_EVALUATION_CONTAINER_NAME", "evaluation-results")
     
     AZURE_FORM_RECOGNIZER_ENDPOINT: str = os.getenv("AZURE_FORM_RECOGNIZER_ENDPOINT", "")
-    azure_document_intelligence_endpoint: str = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", "")
     
     AZURE_AI_FOUNDRY_PROJECT_NAME: str = os.getenv("AZURE_AI_FOUNDRY_PROJECT_NAME", "")
     AZURE_AI_FOUNDRY_RESOURCE_GROUP: str = os.getenv("AZURE_AI_FOUNDRY_RESOURCE_GROUP", "")
@@ -59,6 +56,7 @@ class Settings(BaseSettings):
     max_document_size_mb: int = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "50"))
     supported_document_types: str = os.getenv("SUPPORTED_DOCUMENT_TYPES", "pdf,docx,xlsx,txt")
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "1000"))
+    chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "200"))
     max_chunks_per_document: int = int(os.getenv("MAX_CHUNKS_PER_DOCUMENT", "500"))
     
     evaluation_enabled: bool = os.getenv("EVALUATION_ENABLED", "true").lower() == "true"
@@ -76,6 +74,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
     jwt_expiration_hours: int = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
     
+    AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+    AZURE_STORAGE_ACCOUNT_KEY: Optional[str] = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
+    AZURE_STORAGE_CONTAINER_NAME: str = os.getenv("AZURE_STORAGE_CONTAINER_NAME", "financial-documents")
+    
     mock_azure_services: bool = os.getenv("MOCK_AZURE_SERVICES", "false").lower() == "true"
     enable_debug_logging: bool = os.getenv("ENABLE_DEBUG_LOGGING", "false").lower() == "true"
     enable_performance_profiling: bool = os.getenv("ENABLE_PERFORMANCE_PROFILING", "false").lower() == "true"
@@ -85,8 +87,7 @@ class Settings(BaseSettings):
     api_port: int = int(os.getenv("API_PORT", "8000"))
     allowed_origins: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")
     
-    MAX_CHUNK_SIZE: int = 1000
-    CHUNK_OVERLAP: int = 200
+    # Additional constants (not environment-configurable)
     MAX_TOKENS_PER_REQUEST: int = 4000
     TEMPERATURE: float = 0.1
     

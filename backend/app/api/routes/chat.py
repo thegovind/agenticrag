@@ -13,7 +13,8 @@ from app.models.schemas import (
     Citation
 )
 from app.core.observability import observability
-from app.core.evaluation import get_evaluation_framework
+# Temporarily disable evaluation due to package conflicts
+# from app.core.evaluation import get_evaluation_framework
 from app.services.azure_services import AzureServiceManager
 from app.services.azure_ai_agent_service import AzureAIAgentService
 
@@ -152,21 +153,23 @@ The system is configured to use {request.chat_model.value} for generation and {r
                 })
             
             evaluation_results = []
+            # Temporarily disable evaluation due to package conflicts
             try:
-                eval_framework = get_evaluation_framework()
-                evaluation_results = await eval_framework.evaluate_response(
-                    query=request.message,
-                    response=response_text,
-                    sources=sources,
-                    session_id=session_id,
-                    model_used=request.chat_model.value,
-                    response_time=response_time,
-                    financial_context={
-                        "user_id": x_user_id,
-                        "exercise_type": request.exercise_type.value,
-                        "embedding_model": request.embedding_model.value
-                    }
-                )
+                # eval_framework = get_evaluation_framework()
+                # evaluation_results = await eval_framework.evaluate_response(
+                #     query=request.message,
+                #     response=response_text,
+                #     sources=sources,
+                #     session_id=session_id,
+                #     model_used=request.chat_model.value,
+                #     response_time=response_time,
+                #     financial_context={
+                #         "user_id": x_user_id,
+                #         "exercise_type": request.exercise_type.value,
+                #         "embedding_model": request.embedding_model.value
+                #     }
+                # )
+                pass
                 
                 eval_data = [
                     {
@@ -264,11 +267,12 @@ async def list_sessions(user_id: Optional[str] = None, limit: int = 50):
         observability.track_request("list_sessions")
         
         from app.services.azure_services import AzureServiceManager
+        from app.core.config import settings
         azure_service = AzureServiceManager()
         await azure_service.initialize()
         
-        database = azure_service.cosmos_client.get_database_client(azure_service.settings.COSMOS_DB_DATABASE_NAME)
-        container = database.get_container_client(azure_service.settings.COSMOS_DB_CONTAINER_NAME)
+        database = azure_service.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
+        container = database.get_container_client(settings.AZURE_COSMOS_CONTAINER_NAME)
         
         query = "SELECT c.id, c.created_at, c.updated_at, ARRAY_LENGTH(c.messages) as message_count FROM c ORDER BY c.updated_at DESC"
         items = list(container.query_items(query=query, enable_cross_partition_query=True, max_item_count=limit))

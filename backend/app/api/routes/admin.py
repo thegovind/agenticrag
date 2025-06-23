@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 
 from app.models.schemas import AdminMetrics, EvaluationResult
 from app.core.observability import observability
-from app.core.evaluation import get_evaluation_framework
+# Temporarily disable evaluation due to package conflicts
+# from app.core.evaluation import get_evaluation_framework
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -21,11 +22,12 @@ async def get_admin_metrics(hours: int = Query(24, ge=1, le=168)):
         metrics_summary = observability.get_metrics_summary(hours=hours)
         
         evaluation_summary = {}
-        try:
-            eval_framework = get_evaluation_framework()
-            evaluation_summary = eval_framework.get_evaluation_summary(hours=hours)
-        except RuntimeError:
-            pass
+        # Temporarily disable evaluation due to package conflicts
+        # try:
+        #     eval_framework = get_evaluation_framework()
+        #     evaluation_summary = eval_framework.get_evaluation_summary(hours=hours)
+        # except RuntimeError:
+        #     pass
         
         system_metrics = {
             "cpu_usage": psutil.cpu_percent(interval=1),
@@ -132,30 +134,26 @@ async def get_evaluation_results(
     try:
         observability.track_request("evaluation_results")
         
-        try:
-            eval_framework = get_evaluation_framework()
-            evaluation_summary = eval_framework.get_evaluation_summary(session_id=session_id, hours=hours)
-            
-            if metric_name and metric_name in evaluation_summary.get("metrics", {}):
-                filtered_metrics = {metric_name: evaluation_summary["metrics"][metric_name]}
-                evaluation_summary["metrics"] = filtered_metrics
-            
-            return {
-                "evaluation_summary": evaluation_summary,
-                "session_id": session_id,
-                "metric_filter": metric_name,
-                "time_range_hours": hours,
-                "limit": limit
-            }
-            
-        except RuntimeError:
-            return {
-                "error": "Evaluation framework not initialized",
-                "evaluation_summary": {},
-                "session_id": session_id,
-                "metric_filter": metric_name,
-                "time_range_hours": hours
-            }
+        # Temporarily disable evaluation due to package conflicts
+        # try:
+        #     eval_framework = get_evaluation_framework()
+        #     evaluation_summary = eval_framework.get_evaluation_summary(session_id=session_id, hours=hours)
+        #     
+        #     if metric_name and metric_name in evaluation_summary.get("metrics", {}):
+        #         filtered_metrics = {metric_name: evaluation_summary["metrics"][metric_name]}
+        #         evaluation_summary["metrics"] = filtered_metrics
+        # except RuntimeError:
+        #     evaluation_summary = {"metrics": {}, "total_evaluations": 0}
+        
+        evaluation_summary = {"metrics": {}, "total_evaluations": 0}
+        
+        return {
+            "evaluation_summary": evaluation_summary,
+            "session_id": session_id,
+            "metric_filter": metric_name,
+            "time_range_hours": hours,
+            "limit": limit
+        }
         
     except Exception as e:
         logger.error(f"Error getting evaluation results: {e}")

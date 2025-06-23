@@ -2,26 +2,35 @@ import logging
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
-from contextlib import asynccontextmanager
-from azure.monitor.opentelemetry import configure_azure_monitor
-from opentelemetry import trace, metrics
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.trace import Status, StatusCode
+from contextlib import asynccontextmanager, contextmanager
 import os
 
+# Temporarily disable OpenTelemetry imports due to version conflicts
 try:
-    from opentelemetry.instrumentation.openai import OpenAIInstrumentor
-    OPENAI_INSTRUMENTATION_AVAILABLE = True
+    from opentelemetry import trace, metrics
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.trace import Status, StatusCode
+    OPENTELEMETRY_AVAILABLE = True
+except ImportError:
+    OPENTELEMETRY_AVAILABLE = False
+    logging.warning("OpenTelemetry packages not available. Tracing features will be limited.")
+
+AZURE_MONITOR_AVAILABLE = False  # Temporarily disabled
+
+try:
+    if OPENTELEMETRY_AVAILABLE:
+        from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+    OPENAI_INSTRUMENTATION_AVAILABLE = OPENTELEMETRY_AVAILABLE
 except ImportError:
     OPENAI_INSTRUMENTATION_AVAILABLE = False
     logging.warning("OpenAI instrumentation not available. Install opentelemetry-instrumentation-openai-v2 for full tracing support.")
 
 try:
     from azure.ai.projects import AIProjectClient
-    from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
+    # from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
     AZURE_AI_FOUNDRY_TRACING_AVAILABLE = True
 except ImportError:
     AZURE_AI_FOUNDRY_TRACING_AVAILABLE = False
@@ -33,16 +42,16 @@ def setup_observability():
     connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
     azure_monitor_connection_string = os.getenv("AZURE_MONITOR_CONNECTION_STRING")
     
-    if connection_string or azure_monitor_connection_string:
+    if AZURE_MONITOR_AVAILABLE and (connection_string or azure_monitor_connection_string):
         try:
-            configure_azure_monitor(
-                connection_string=connection_string or azure_monitor_connection_string
-            )
+            # configure_azure_monitor(
+            #     connection_string=connection_string or azure_monitor_connection_string
+            # )
             logging.info("Azure Monitor configured with Application Insights")
         except Exception as e:
             logging.error(f"Failed to configure Azure Monitor: {e}")
     else:
-        logging.warning("APPLICATIONINSIGHTS_CONNECTION_STRING or AZURE_MONITOR_CONNECTION_STRING not set. Azure Monitor tracing disabled.")
+        logging.warning("Azure Monitor temporarily disabled due to version conflicts. Some tracing features may be limited.")
     
     if os.getenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false").lower() == "true":
         os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "true"
@@ -464,6 +473,31 @@ class ObservabilityManager:
                 span.set_attribute("duration_seconds", duration)
                 span.set_attribute("ai.operation.duration", duration)
     
+    @contextmanager
+    def trace_operation_sync(self, operation_name: str, **attributes):
+        """Synchronous context manager for distributed tracing with Azure AI Foundry compatibility"""
+        with self.tracer.start_as_current_span(operation_name) as span:
+            for key, value in attributes.items():
+                span.set_attribute(key, str(value))
+            
+            span.set_attribute("ai.system", "rag_financial_assistant")
+            span.set_attribute("ai.operation.name", operation_name)
+            
+            start_time = time.time()
+            try:
+                yield span
+                span.set_status(Status(StatusCode.OK))
+            except Exception as e:
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.record_exception(e)
+                span.set_attribute("error.type", type(e).__name__)
+                span.set_attribute("error.message", str(e))
+                raise
+            finally:
+                duration = time.time() - start_time
+                span.set_attribute("duration_seconds", duration)
+                span.set_attribute("ai.operation.duration", duration)
+
     @asynccontextmanager
     async def trace_rag_operation(self, operation_type: str, query: str = None, model: str = None, **attributes):
         """Specialized tracing for RAG operations with Azure AI Foundry semantics"""
@@ -684,11 +718,61 @@ class ObservabilityManager:
         except Exception:
             pass  # Don't fail if tracing is not available
 
+# Mock implementations when OpenTelemetry is not available
+if not OPENTELEMETRY_AVAILABLE:
+    class MockSpan:
+        def set_attribute(self, key, value):
+            pass
+        
+        def set_status(self, status):
+            pass
+            
+        def record_exception(self, exception):
+            pass
+    
+    class MockTracer:
+        def start_as_current_span(self, name):
+            from contextlib import contextmanager
+            @contextmanager
+            def mock_span():
+                yield MockSpan()
+            return mock_span()
+    
+    class MockMeter:
+        def create_counter(self, name, description=None):
+            class MockCounter:
+                def add(self, amount, attributes=None):
+                    pass
+            return MockCounter()
+        
+        def create_histogram(self, name, description=None):
+            class MockHistogram:
+                def record(self, amount, attributes=None):
+                    pass
+            return MockHistogram()
+        
+        def create_up_down_counter(self, name, description=None):
+            class MockUpDownCounter:
+                def add(self, amount, attributes=None):
+                    pass
+            return MockUpDownCounter()
+    
+    class MockTrace:
+        def get_tracer(self, name):
+            return MockTracer()
+    
+    class MockMetrics:
+        def get_meter(self, name):
+            return MockMeter()
+    
+    trace = MockTrace()
+    metrics = MockMetrics()
+
 observability = ObservabilityManager()
 
 def trace_operation(operation_name: str, **attributes):
     """Module-level trace_operation function"""
-    return observability.trace_operation(operation_name, **attributes)
+    return observability.trace_operation_sync(operation_name, **attributes)
 
 def record_error(error_type: str, error_message: str, **attributes):
     """Module-level record_error function"""
@@ -697,12 +781,15 @@ def record_error(error_type: str, error_message: str, **attributes):
 def setup_fastapi_instrumentation(app):
     """Setup FastAPI instrumentation for distributed tracing with Azure AI Foundry support"""
     try:
-        FastAPIInstrumentor.instrument_app(app)
-        HTTPXClientInstrumentor().instrument()
+        if OPENTELEMETRY_AVAILABLE:
+            FastAPIInstrumentor.instrument_app(app)
+            HTTPXClientInstrumentor().instrument()
         
         if OPENAI_INSTRUMENTATION_AVAILABLE:
             # OpenAI instrumentation is already set up in setup_observability()
             logging.info("FastAPI and OpenAI instrumentation configured for Azure AI Foundry tracing")
+        else:
+            logging.info("FastAPI instrumentation disabled due to missing OpenTelemetry packages")
         
         if AZURE_AI_FOUNDRY_TRACING_AVAILABLE:
             project_endpoint = os.getenv("AZURE_AI_PROJECT_ENDPOINT")

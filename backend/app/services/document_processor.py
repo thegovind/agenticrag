@@ -68,34 +68,122 @@ class DocumentProcessor:
             Dict containing processed document information with enhanced structure
         """
         try:
-            logger.info(f"Processing financial document from source: {source}")
+            logger.info(f"=== DOCUMENT PROCESSOR START ===")
+            logger.info(f"Source: {source}")
+            logger.info(f"Content type: {content_type}")
+            logger.info(f"Content size: {len(content)} bytes")
+            logger.info(f"Metadata: {metadata}")
+            
             observability.track_document_processing_start(source, content_type)
             
+            logger.info(f"Step 1: Calling Azure Document Intelligence...")
             extracted_content = await self.azure_manager.analyze_document(content, content_type)
+            logger.info(f"Step 1 COMPLETE: Document analysis finished")
+            logger.info(f"Extracted content length: {len(extracted_content.get('content', ''))}")
+            logger.info(f"Tables found: {len(extracted_content.get('tables', []))}")
             
+            logger.info(f"Step 2: Generating document ID...")
             document_id = self._generate_document_id(source, extracted_content["content"])
+            logger.info(f"Step 2 COMPLETE: Document ID generated: {document_id}")
             
+            logger.info(f"Step 3: Extracting financial info...")
             financial_info = await self._extract_comprehensive_financial_info(
                 extracted_content, source
             )
+            logger.info(f"Step 3 COMPLETE: Financial info extracted: {list(financial_info.keys())}")
             
+            logger.info(f"Step 4: Parsing document structure...")
             document_structure = await self._parse_financial_document_structure(
                 extracted_content, financial_info
             )
+            logger.info(f"Step 4 COMPLETE: Document structure parsed")
             
-            chunks = await self._create_hierarchical_financial_chunks(
-                document_structure, 
-                document_id,
-                {**(metadata or {}), **financial_info}
-            )
+            logger.info(f"Step 5: Creating markdown chunks...")
+            try:
+                chunks = await self._create_markdown_chunks(
+                    document_structure, 
+                    document_id,
+                    {**(metadata or {}), **financial_info}
+                )
+                logger.info(f"Step 5 COMPLETE: Created {len(chunks)} chunks using markdown chunking")
+            except Exception as e:
+                logger.warning(f"Markdown chunking failed: {e}, falling back to basic chunking")
+                # Fallback to basic text chunking
+                chunks = await self._create_basic_chunks(
+                    extracted_content["content"],
+                    document_id,
+                    {**(metadata or {}), **financial_info}
+                )
+                logger.info(f"Step 5 COMPLETE (FALLBACK): Created {len(chunks)} chunks using basic chunking")
             
-            for chunk in chunks:
+            logger.info(f"Step 6: Generating embeddings for chunks...")
+            for i, chunk in enumerate(chunks):
+                if i % 5 == 0:  # Log every 5th chunk to avoid spam
+                    logger.info(f"Generating embedding for chunk {i+1}/{len(chunks)}")
                 chunk.embedding = await self.azure_manager.get_embedding(chunk.content)
+            logger.info(f"Step 6 COMPLETE: All embeddings generated")
             
+            logger.info(f"Step 6 COMPLETE: All embeddings generated")
+            
+            # logger.info(f"Step 6.5: Uploading document to Azure Storage...")
+            # # Upload original document to Azure Storage
+            # try:
+            #     storage_url = await self.azure_manager.upload_document_to_storage(
+            #         content, source, document_id
+            #     )
+            #     logger.info(f"Step 6.5 COMPLETE: Document uploaded to storage: {storage_url}")
+            #     # Add storage URL to metadata
+            #     financial_info["storage_url"] = storage_url
+            # except Exception as e:
+            #     logger.warning(f"Failed to upload document to storage: {e}")
+            #     financial_info["storage_url"] = None
+            
+            logger.info(f"Step 7: Preparing search documents...")
+            # Convert chunks to search index format and add to knowledge base
+            search_documents = []
+            for chunk in chunks:
+                search_doc = {
+                    "id": f"{document_id}_{chunk.chunk_id}",
+                    "content": chunk.content,
+                    "title": chunk.metadata.get("title", source),
+                    "document_id": document_id,
+                    "source": source,
+                    "chunk_id": chunk.chunk_id,
+                    "document_type": chunk.metadata.get("document_type", "financial"),
+                    "company": chunk.metadata.get("company_name", ""),
+                    "filing_date": chunk.metadata.get("filing_date", ""),
+                    "section_type": chunk.metadata.get("section_type", "general"),
+                    "page_number": chunk.metadata.get("page_number", 1),
+                    "content_vector": chunk.embedding,
+                    "credibility_score": chunk.metadata.get("credibility_score", 0.8),
+                    "processed_at": datetime.utcnow().isoformat(),
+                    "citation_info": json.dumps(chunk.citation_info or {})
+                }
+                search_documents.append(search_doc)
+            logger.info(f"Step 7 COMPLETE: Prepared {len(search_documents)} search documents")
+            
+            logger.info(f"Step 8: Adding documents to Azure Search index...")
+            # Add documents to Azure Search index
+            if search_documents:
+                logger.info(f"Attempting to add {len(search_documents)} chunks for document {document_id} to search index")
+                success = await self.azure_manager.add_documents_to_index(search_documents)
+                if not success:
+                    logger.error(f"FAILED to add chunks for document {document_id} to search index")
+                else:
+                    logger.info(f"SUCCESS: Added {len(search_documents)} chunks for document {document_id} to search index")
+            else:
+                logger.warning(f"No search documents generated for document {document_id}")
+            logger.info(f"Step 8 COMPLETE: Search index update finished")
+            
+            logger.info(f"Step 9: Extracting key financial metrics...")
             key_metrics = await self._extract_key_financial_metrics(
                 extracted_content["content"], financial_info
             )
+            logger.info(f"Step 9 COMPLETE: Extracted {len(key_metrics)} key metrics")
             
+            logger.info(f"Step 9 COMPLETE: Extracted {len(key_metrics)} key metrics")
+            
+            logger.info(f"Step 10: Building final processed document...")
             processed_doc = {
                 "document_id": document_id,
                 "source": source,
@@ -119,9 +207,13 @@ class DocumentProcessor:
                 document_id, len(chunks), len(key_metrics)
             )
             
-            logger.info(f"Successfully processed document {document_id} with {len(chunks)} chunks, "
-                       f"{len(document_structure.get('sections', []))} sections, "
-                       f"{len(document_structure.get('tables', []))} tables")
+            logger.info(f"=== DOCUMENT PROCESSING COMPLETE ===")
+            logger.info(f"Document ID: {document_id}")
+            logger.info(f"Total chunks: {len(chunks)}")
+            logger.info(f"Sections found: {len(document_structure.get('sections', []))}")
+            logger.info(f"Tables found: {len(document_structure.get('tables', []))}")
+            logger.info(f"Metrics extracted: {len(key_metrics)}")
+            logger.info(f"Search documents added: {len(search_documents) if search_documents else 0}")
             
             return processed_doc
             
@@ -387,7 +479,7 @@ class DocumentProcessor:
         section_headers = [
             r"PART\s+[IVX]+[.\s]*([A-Z][A-Z\s,&]+)",
             r"ITEM\s+\d+[A-Z]*[.\s]*([A-Z][A-Z\s,&]+)",
-            r"^([A-Z][A-Z\s,&]{10,})\s*$",  # All caps headers
+            r"^([A-Z][A-Za-z\s,&]{10,})\s*$",  # All caps headers
             r"^\d+\.\s*([A-Z][A-Za-z\s,&]+)$"  # Numbered sections
         ]
         
@@ -977,3 +1069,620 @@ class DocumentProcessor:
             "embedding": chunk.embedding,
             "citation_info": chunk.citation_info
         }
+    
+    async def _create_markdown_chunks(self, document_structure: Dict, document_id: str, metadata: Dict) -> List[DocumentChunk]:
+        """
+        Create chunks using markdown formatting for better content representation
+        """
+        chunks = []
+        content = document_structure.get("extracted_content", {}).get("content", "")
+        tables = document_structure.get("extracted_content", {}).get("tables", [])
+        
+        logger.info(f"DEBUG: Content length: {len(content)}")
+        logger.info(f"DEBUG: Number of tables: {len(tables)}")
+        logger.info(f"DEBUG: Content preview: {content[:200]}...")
+        
+        # Extract intelligent metadata using LLM
+        logger.info(f"DEBUG: Starting intelligent metadata extraction...")
+        intelligent_metadata = await self._extract_intelligent_metadata(content, metadata)
+        logger.info(f"DEBUG: Intelligent metadata extracted: {intelligent_metadata}")
+        
+        # Convert document to markdown format
+        logger.info(f"DEBUG: Converting to markdown...")
+        markdown_content = await self._convert_to_markdown(content, tables)
+        logger.info(f"DEBUG: Markdown content length: {len(markdown_content)}")
+        logger.info(f"DEBUG: Markdown preview: {markdown_content[:300]}...")
+        
+        # Split markdown into logical chunks
+        logger.info(f"DEBUG: Splitting markdown content...")
+        markdown_chunks = await self._split_markdown_content(markdown_content)
+        logger.info(f"DEBUG: Split into {len(markdown_chunks)} preliminary chunks")
+        
+        for i, chunk_content in enumerate(markdown_chunks):
+            if len(chunk_content.strip()) < 50:  # Skip very short chunks
+                logger.info(f"DEBUG: Skipping chunk {i} - too short ({len(chunk_content)} chars)")
+                continue
+                
+            # Extract page number from chunk content or context
+            page_number = await self._extract_page_number_from_chunk(chunk_content, content)
+            
+            # Extract section type from chunk content
+            section_type = await self._extract_section_type_from_chunk(chunk_content)
+            
+            chunk_metadata = {
+                **intelligent_metadata,
+                "chunk_index": i,
+                "section_type": section_type,
+                "page_number": page_number,
+                "content_type": "markdown",
+                "chunk_type": "text"
+            }
+            
+            chunk = DocumentChunk(
+                chunk_id=f"{document_id}_chunk_{i}",
+                content=chunk_content,
+                metadata=chunk_metadata,
+                citation_info={
+                    "page_number": page_number,
+                    "section_type": section_type,
+                    "document_type": intelligent_metadata.get("document_type"),
+                    "company": intelligent_metadata.get("company_name"),
+                    "filing_date": intelligent_metadata.get("filing_date")
+                }
+            )
+            chunks.append(chunk)
+            
+        logger.info(f"DEBUG: Final chunks created: {len(chunks)}")
+        return chunks
+
+    async def _extract_intelligent_metadata(self, content: str, existing_metadata: Dict) -> Dict:
+        """
+        Use LLM to intelligently extract metadata from document content
+        """
+        try:
+            logger.info(f"Starting intelligent metadata extraction using LLM...")
+            
+            # Skip LLM extraction if deployment is not available, use basic extraction
+            if not settings.AZURE_OPENAI_DEPLOYMENT_NAME or settings.AZURE_OPENAI_DEPLOYMENT_NAME == "":
+                logger.warning("No Azure OpenAI deployment configured, skipping LLM metadata extraction")
+                return self._extract_basic_metadata(content, existing_metadata)
+            
+            logger.info(f"DEBUG: Using deployment: {settings.AZURE_OPENAI_DEPLOYMENT_NAME}")
+            logger.info(f"DEBUG: Content length for LLM: {len(content)}")
+            logger.info(f"DEBUG: Content sample: {content[:500]}...")
+            
+            # Create a prompt for metadata extraction
+            extraction_prompt = f"""
+            Analyze the following financial document content and extract key metadata. 
+            Return ONLY a JSON object with the following fields:
+            - company_name: The exact company name from the document
+            - document_type: Type of document (10-K, 10-Q, 8-K, Annual Report, etc.)
+            - filing_date: Filing date in YYYY-MM-DD format if available
+            - fiscal_year: Fiscal year if mentioned
+            - ticker_symbol: Stock ticker symbol if mentioned
+            
+            Document content (first 2000 characters):
+            {content[:2000]}
+            
+            JSON:
+            """
+            
+            logger.info(f"Calling Azure OpenAI for metadata extraction...")
+            response = self.azure_manager.openai_client.chat.completions.create(
+                model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,  # Use the correct deployment name
+                messages=[
+                    {"role": "system", "content": "You are an expert financial document analyzer. Extract metadata accurately and return only valid JSON."},
+                    {"role": "user", "content": extraction_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=500
+            )
+            logger.info(f"LLM response received for metadata extraction")
+            
+            # Parse the LLM response
+            llm_metadata = {}
+            try:
+                import json
+                llm_response = response.choices[0].message.content.strip()
+                logger.info(f"DEBUG: Raw LLM response: {llm_response}")
+                
+                # Remove any markdown formatting
+                if llm_response.startswith("```json"):
+                    llm_response = llm_response[7:-3]
+                elif llm_response.startswith("```"):
+                    llm_response = llm_response[3:-3]
+                
+                llm_metadata = json.loads(llm_response)
+                logger.info(f"LLM extracted metadata: {llm_metadata}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse LLM metadata response: {e}")
+                logger.warning(f"DEBUG: Problematic response was: {llm_response}")
+                llm_metadata = {}
+            
+            # Combine with existing metadata, preferring LLM results for accuracy
+            final_metadata = {**existing_metadata}
+            logger.info(f"DEBUG: Starting metadata: {existing_metadata}")
+            
+            # Update with LLM extracted data if available and valid
+            if llm_metadata.get("company_name") and llm_metadata["company_name"] != "N/A":
+                final_metadata["company_name"] = llm_metadata["company_name"]
+                logger.info(f"DEBUG: Updated company_name from LLM: {llm_metadata['company_name']}")
+            
+            if llm_metadata.get("document_type") and llm_metadata["document_type"] != "N/A":
+                final_metadata["document_type"] = llm_metadata["document_type"]
+                logger.info(f"DEBUG: Updated document_type from LLM: {llm_metadata['document_type']}")
+                
+            if llm_metadata.get("ticker_symbol") and llm_metadata["ticker_symbol"] != "N/A":
+                final_metadata["ticker_symbol"] = llm_metadata["ticker_symbol"]
+                logger.info(f"DEBUG: Updated ticker_symbol from LLM: {llm_metadata['ticker_symbol']}")
+                
+            if llm_metadata.get("filing_date") and llm_metadata["filing_date"] != "N/A":
+                try:
+                    # Validate date format
+                    from datetime import datetime
+                    datetime.strptime(llm_metadata["filing_date"], "%Y-%m-%d")
+                    final_metadata["filing_date"] = llm_metadata["filing_date"]
+                    logger.info(f"DEBUG: Updated filing_date from LLM: {llm_metadata['filing_date']}")
+                except ValueError:
+                    logger.warning(f"Invalid date format from LLM: {llm_metadata['filing_date']}")
+            
+            logger.info(f"DEBUG: Final metadata: {final_metadata}")
+            return final_metadata
+            
+            if llm_metadata.get("fiscal_year"):
+                final_metadata["fiscal_year"] = llm_metadata["fiscal_year"]
+                
+            if llm_metadata.get("ticker_symbol"):
+                final_metadata["ticker_symbol"] = llm_metadata["ticker_symbol"]
+            
+            return final_metadata
+            
+        except Exception as e:
+            logger.error(f"Error in intelligent metadata extraction: {e}")
+            logger.info("Falling back to basic metadata extraction")
+            return self._extract_basic_metadata(content, existing_metadata)
+
+    def _extract_basic_metadata(self, content: str, existing_metadata: Dict) -> Dict:
+        """
+        Extract basic metadata using pattern matching instead of LLM
+        """
+        try:
+            logger.info("Extracting basic metadata using pattern matching...")
+            
+            final_metadata = {**existing_metadata}
+            content_lower = content.lower()
+            
+            # Extract company name patterns
+            company_patterns = [
+                r'(?:company name|registrant|corporation|inc\.|corp\.|llc):?\s*([A-Z][A-Za-z\s&,.-]+?)(?:\n|$|,)',
+                r'([A-Z][A-Za-z\s&,.-]+?)\s+(?:corporation|inc\.|corp\.|llc|company)',
+                r'registrant[:\s]+([A-Z][A-Za-z\s&,.-]+?)(?:\n|$)',
+            ]
+            
+            for pattern in company_patterns:
+                match = re.search(pattern, content, re.IGNORECASE)
+                if match:
+                    company_name = match.group(1).strip()
+                    if len(company_name) > 5 and len(company_name) < 100:  # Reasonable length
+                        final_metadata["company_name"] = company_name
+                        break
+            
+            # Extract document type
+            doc_type_patterns = [
+                r'form\s+(10-k|10-q|8-k|20-f)',
+                r'annual report',
+                r'quarterly report',
+                r'proxy statement'
+            ]
+            
+            for pattern in doc_type_patterns:
+                match = re.search(pattern, content_lower)
+                if match:
+                    if hasattr(match, 'group') and match.group(1):
+                        final_metadata["document_type"] = match.group(1).upper()
+                    else:
+                        final_metadata["document_type"] = match.group(0).title()
+                    break
+            
+            # Extract filing date patterns
+            date_patterns = [
+                r'(?:filed|filing date|date filed)[:\s]+(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
+                r'(?:filed|filing date|date filed)[:\s]+(\d{4}-\d{2}-\d{2})',
+                r'for the (?:fiscal )?year ended[:\s]+(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
+            ]
+            
+            for pattern in date_patterns:
+                match = re.search(pattern, content_lower)
+                if match:
+                    date_str = match.group(1)
+                    # Try to normalize the date format
+                    try:
+                        from datetime import datetime
+                        if '/' in date_str:
+                            parsed_date = datetime.strptime(date_str, '%m/%d/%Y')
+                        elif '-' in date_str and len(date_str.split('-')[0]) == 4:
+                            parsed_date = datetime.strptime(date_str, '%Y-%m-%d')
+                        else:
+                            continue
+                        final_metadata["filing_date"] = parsed_date.strftime('%Y-%m-%d')
+                        break
+                    except ValueError:
+                        continue
+            
+            # Extract ticker symbol
+            ticker_patterns = [
+                r'(?:trading symbol|ticker|symbol)[:\s]+([A-Z]{1,5})',
+                r'nasdaq[:\s]+([A-Z]{1,5})',
+                r'nyse[:\s]+([A-Z]{1,5})'
+            ]
+            
+            for pattern in ticker_patterns:
+                match = re.search(pattern, content, re.IGNORECASE)
+                if match:
+                    final_metadata["ticker_symbol"] = match.group(1).upper()
+                    break
+            
+            logger.info(f"Basic metadata extracted: {list(final_metadata.keys())}")
+            return final_metadata
+            
+        except Exception as e:
+            logger.error(f"Error in basic metadata extraction: {e}")
+            return existing_metadata
+
+    async def _create_basic_chunks(self, content: str, document_id: str, metadata: Dict) -> List[DocumentChunk]:
+        """
+        Create basic text chunks as fallback when markdown chunking fails
+        """
+        logger.info(f"Creating basic chunks for document {document_id}")
+        chunks = []
+        
+        # Simple text splitting approach
+        max_chunk_size = 1500
+        overlap = 200
+        
+        # Split text into sentences first
+        sentences = re.split(r'[.!?]+', content)
+        
+        current_chunk = ""
+        chunk_index = 0
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            # If adding this sentence would exceed chunk size
+            if len(current_chunk) + len(sentence) > max_chunk_size and current_chunk:
+                # Create chunk
+                chunk = DocumentChunk(
+                    chunk_id=f"basic_chunk_{chunk_index}",
+                    content=current_chunk.strip(),
+                    metadata={
+                        **metadata,
+                        "chunk_index": chunk_index,
+                        "section_type": "general",
+                        "page_number": max(1, chunk_index // 3 + 1),  # Rough page estimation
+                        "content_type": "text",
+                        "chunk_type": "basic"
+                    },
+                    citation_info={
+                        "page_number": max(1, chunk_index // 3 + 1),
+                        "section_type": "general",
+                        "document_type": metadata.get("document_type", "financial"),
+                        "company": metadata.get("company_name", ""),
+                    }
+                )
+                chunks.append(chunk)
+                
+                # Start new chunk with overlap
+                if len(current_chunk) > overlap:
+                    current_chunk = current_chunk[-overlap:] + " " + sentence
+                else:
+                    current_chunk = sentence
+                chunk_index += 1
+            else:
+                current_chunk += " " + sentence
+        
+        # Add final chunk
+        if current_chunk.strip():
+            chunk = DocumentChunk(
+                chunk_id=f"basic_chunk_{chunk_index}",
+                content=current_chunk.strip(),
+                metadata={
+                    **metadata,
+                    "chunk_index": chunk_index,
+                    "section_type": "general",
+                    "page_number": max(1, chunk_index // 3 + 1),
+                    "content_type": "text",
+                    "chunk_type": "basic"
+                },
+                citation_info={
+                    "page_number": max(1, chunk_index // 3 + 1),
+                    "section_type": "general",
+                    "document_type": metadata.get("document_type", "financial"),
+                    "company": metadata.get("company_name", ""),
+                }
+            )
+            chunks.append(chunk)
+        
+        logger.info(f"Created {len(chunks)} basic chunks")
+        return chunks
+
+    async def _convert_to_markdown(self, content: str, tables: List) -> str:
+        """
+        Convert document content to markdown format with proper structure
+        """
+        try:
+            logger.info(f"DEBUG: Converting content to markdown, length: {len(content)}")
+            markdown_content = []
+            
+            # Split content into sections
+            sections = self._identify_document_sections(content)
+            logger.info(f"DEBUG: Identified {len(sections)} sections")
+            
+            for i, section in enumerate(sections):
+                logger.info(f"DEBUG: Processing section {i}: {section.get('title', 'No title')[:50]}")
+                # Add section header
+                if section.get("title"):
+                    level = section.get("level", 2)
+                    markdown_content.append(f"{'#' * level} {section['title']}\n")
+                
+                # Add section content with proper formatting
+                section_text = section.get("content", "")
+                
+                # Clean and format the text
+                formatted_text = self._format_text_content(section_text)
+                markdown_content.append(formatted_text)
+                markdown_content.append("\n")
+            
+            # Add tables in markdown format
+            logger.info(f"DEBUG: Processing {len(tables)} tables")
+            for i, table in enumerate(tables):
+                table_markdown = self._convert_table_to_markdown(table, i)
+                if table_markdown:
+                    markdown_content.append(table_markdown)
+                    markdown_content.append("\n")
+            
+            final_markdown = "\n".join(markdown_content)
+            logger.info(f"DEBUG: Final markdown length: {len(final_markdown)}")
+            
+            # If no sections were found, use the raw content as fallback
+            if len(sections) == 0 and len(final_markdown.strip()) < 100:
+                logger.warning("DEBUG: No sections found, using raw content")
+                return content
+            
+            return final_markdown
+            
+        except Exception as e:
+            logger.error(f"Error converting to markdown: {e}")
+            # Fallback to original content
+            return content
+
+    def _identify_document_sections(self, content: str) -> List[Dict]:
+        """
+        Identify document sections using patterns and structure
+        """
+        sections = []
+        
+        # Common financial document section patterns
+        section_patterns = [
+            (r"PART\s+[IVX]+[.\s]*ITEM\s+\d+[A-Z]*[.\s]*([^.\n]+)", 2),
+            (r"ITEM\s+\d+[A-Z]*[.\s]*([^.\n]+)", 2),
+            (r"^([A-Z\s]{10,})\s*$", 1),  # All caps titles
+            (r"^\d+\.\s*([^.\n]+)", 3),  # Numbered sections
+        ]
+        
+        lines = content.split('\n')
+        current_section = None
+        current_content = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check if line matches a section pattern
+            section_found = False
+            for pattern, level in section_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    # Save previous section
+                    if current_section:
+                        current_section["content"] = "\n".join(current_content)
+                        sections.append(current_section)
+                    
+                    # Start new section
+                    current_section = {
+                        "title": match.group(1).strip() if match.groups() else line,
+                        "level": level,
+                        "content": ""
+                    }
+                    current_content = []
+                    section_found = True
+                    break
+            
+            if not section_found:
+                current_content.append(line)
+        
+        # Add final section
+        if current_section:
+            current_section["content"] = "\n".join(current_content)
+            sections.append(current_section)
+        
+        # If no sections found, create a default section
+        if not sections:
+            sections.append({
+                "title": "Document Content",
+                "level": 1,
+                "content": content
+            })
+        
+        return sections
+
+    def _format_text_content(self, text: str) -> str:
+        """
+        Format text content with proper markdown styling
+        """
+        # Clean up whitespace
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)  # Remove excessive line breaks
+        text = re.sub(r'[ \t]+', ' ', text)  # Normalize spaces
+        
+        # Format lists
+        text = re.sub(r'^[\s]*[•·▪▫]\s*', '- ', text, flags=re.MULTILINE)
+        text = re.sub(r'^[\s]*\d+\.\s*', '1. ', text, flags=re.MULTILINE)
+        
+        # Format emphasis (simple patterns)
+        text = re.sub(r'\b([A-Z][A-Z\s]{5,})\b', r'**\1**', text)  # All caps to bold
+        
+        return text.strip()
+
+    def _convert_table_to_markdown(self, table: Dict, table_index: int) -> str:
+        """
+        Convert table data to markdown table format
+        """
+        try:
+            # Extract table data
+            if hasattr(table, 'rows') and hasattr(table, 'headers'):
+                headers = table.headers
+                rows = table.rows
+            elif isinstance(table, dict):
+                headers = table.get("headers", [])
+                rows = table.get("rows", [])
+                if not headers and rows:
+                    headers = [f"Column {i+1}" for i in range(len(rows[0]) if rows else 0)]
+            else:
+                return f"\n**Table {table_index + 1}**: {str(table)}\n"
+            
+            if not rows:
+                return ""
+            
+            markdown_table = []
+            
+            # Add table title
+            table_title = getattr(table, 'title', f"Table {table_index + 1}")
+            markdown_table.append(f"\n### {table_title}\n")
+            
+            # Add headers
+            if headers:
+                header_row = "| " + " | ".join(str(h) for h in headers) + " |"
+                separator = "| " + " | ".join("---" for _ in headers) + " |"
+                markdown_table.append(header_row)
+                markdown_table.append(separator)
+            
+            # Add data rows
+            for row in rows:
+                if row:  # Skip empty rows
+                    row_data = "| " + " | ".join(str(cell) for cell in row) + " |"
+                    markdown_table.append(row_data)
+            
+            return "\n".join(markdown_table) + "\n"
+            
+        except Exception as e:
+            logger.warning(f"Error converting table {table_index} to markdown: {e}")
+            return f"\n**Table {table_index + 1}**: [Table data could not be formatted]\n"
+
+    async def _split_markdown_content(self, markdown_content: str) -> List[str]:
+        """
+        Split markdown content into appropriately sized chunks
+        """
+        chunks = []
+        current_chunk = []
+        current_size = 0
+        max_chunk_size = 1500  # Characters per chunk
+        
+        logger.info(f"DEBUG: Splitting markdown content of length {len(markdown_content)}")
+        
+        lines = markdown_content.split('\n')
+        logger.info(f"DEBUG: Split into {len(lines)} lines")
+        
+        for i, line in enumerate(lines):
+            line_size = len(line)
+            
+            # If adding this line would exceed chunk size and we have content
+            if current_size + line_size > max_chunk_size and current_chunk:
+                chunk_content = '\n'.join(current_chunk).strip()
+                if chunk_content:
+                    chunks.append(chunk_content)
+                    logger.info(f"DEBUG: Created chunk {len(chunks)}, size: {len(chunk_content)}")
+                current_chunk = []
+                current_size = 0
+            
+            current_chunk.append(line)
+            current_size += line_size
+        
+        # Add final chunk
+        if current_chunk:
+            chunk_content = '\n'.join(current_chunk).strip()
+            if chunk_content:
+                chunks.append(chunk_content)
+                logger.info(f"DEBUG: Created final chunk {len(chunks)}, size: {len(chunk_content)}")
+        
+        logger.info(f"DEBUG: Total chunks created: {len(chunks)}")
+        return chunks
+
+    async def _extract_page_number_from_chunk(self, chunk_content: str, full_content: str) -> int:
+        """
+        Extract accurate page number for a chunk using simple estimation
+        """
+        try:
+            # Look for page references in the chunk
+            page_patterns = [
+                r'(?:page|p\.)\s*(\d+)',
+                r'- (\d+) -',  # Common page number format
+                r'Page\s+(\d+)',
+            ]
+            
+            for pattern in page_patterns:
+                matches = re.findall(pattern, chunk_content, re.IGNORECASE)
+                if matches:
+                    return int(matches[0])
+            
+            # If no direct page reference, estimate based on position in document
+            chunk_position = full_content.find(chunk_content[:100])  # Find chunk in full content
+            if chunk_position >= 0:
+                # Rough estimation: 3000 characters per page
+                estimated_page = max(1, chunk_position // 3000 + 1)
+                return estimated_page
+            
+            return 1  # Default to page 1
+            
+        except Exception as e:
+            logger.warning(f"Error extracting page number: {e}")
+            return 1
+
+    async def _extract_section_type_from_chunk(self, chunk_content: str) -> str:
+        """
+        Extract section type from chunk content using pattern matching
+        """
+        try:
+            content_lower = chunk_content.lower()
+            
+            # Define section type patterns
+            section_patterns = {
+                "business": ["business", "company overview", "operations", "products and services"],
+                "risk_factors": ["risk factors", "risks", "forward-looking statements"],
+                "financial_statements": ["financial statements", "balance sheet", "income statement", "cash flow"],
+                "md&a": ["management's discussion", "md&a", "financial condition", "results of operations"],
+                "controls": ["controls and procedures", "internal controls", "disclosure controls"],
+                "legal_proceedings": ["legal proceedings", "litigation", "legal matters"],
+                "market_data": ["market for", "common equity", "stock performance"],
+                "exhibits": ["exhibits", "signatures"],
+                "executive_compensation": ["executive compensation", "compensation discussion"],
+                "corporate_governance": ["corporate governance", "board of directors"]
+            }
+            
+            for section_type, keywords in section_patterns.items():
+                for keyword in keywords:
+                    if keyword in content_lower:
+                        return section_type
+            
+            # Check for ITEM patterns
+            item_match = re.search(r'item\s+(\d+[a-z]*)', content_lower)
+            if item_match:
+                return f"item_{item_match.group(1)}"
+            
+            return "general"
+            
+        except Exception as e:
+            logger.warning(f"Error extracting section type: {e}")
+            return "general"

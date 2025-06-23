@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Request
 from typing import List, Optional
 import logging
 from datetime import datetime
@@ -17,18 +17,48 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @router.get("/stats", response_model=KnowledgeBaseStats)
-async def get_knowledge_base_stats():
+async def get_knowledge_base_stats(request: Request):
     """Get current knowledge base statistics"""
     try:
         observability.track_request("knowledge_base_stats")
         
-        stats = KnowledgeBaseStats(
-            total_documents=0,
-            total_chunks=0,
-            last_updated=datetime.utcnow(),
-            documents_by_type={},
-            processing_queue_size=0
-        )
+        azure_manager = getattr(request.app.state, 'azure_manager', None)
+        if not azure_manager:
+            # Return default stats if Azure services not available
+            stats = KnowledgeBaseStats(
+                total_documents=0,
+                total_chunks=0,
+                last_updated=datetime.utcnow(),
+                documents_by_type={},
+                processing_queue_size=0
+            )
+            return stats
+        
+        # Get stats from Azure Search (simple count query)
+        try:
+            # Perform a search to get total count
+            results = await azure_manager.hybrid_search(query="*", top_k=1)
+            total_chunks = len(results) if results else 0
+            
+            # For a more accurate count, we could use search_client.get_document_count()
+            # but for now this gives us a basic implementation
+            
+            stats = KnowledgeBaseStats(
+                total_documents=0,  # We'd need to count unique document_ids
+                total_chunks=total_chunks,
+                last_updated=datetime.utcnow(),
+                documents_by_type={},
+                processing_queue_size=0
+            )
+        except Exception as e:
+            logger.warning(f"Could not get real stats from Azure Search: {e}")
+            stats = KnowledgeBaseStats(
+                total_documents=0,
+                total_chunks=0,
+                last_updated=datetime.utcnow(),
+                documents_by_type={},
+                processing_queue_size=0
+            )
         
         return stats
     except Exception as e:
@@ -243,6 +273,7 @@ async def get_knowledge_base_metrics():
 
 @router.get("/search")
 async def search_knowledge_base(
+    request: Request,
     query: str,
     limit: int = 10,
     document_type: Optional[str] = None,
@@ -254,10 +285,25 @@ async def search_knowledge_base(
         
         logger.info(f"Knowledge base search: {query}")
         
+        azure_manager = getattr(request.app.state, 'azure_manager', None)
+        if not azure_manager:
+            raise HTTPException(status_code=500, detail="Azure services not initialized")
+        
+        # Perform hybrid search in Azure Search
+        results = await azure_manager.hybrid_search(
+            query=query,
+            top_k=limit,
+            min_score=min_score
+        )
+        
+        # Filter by document type if provided
+        if document_type:
+            results = [r for r in results if r.get('document_type') == document_type]
+        
         return {
             "query": query,
-            "results": [],
-            "total_count": 0
+            "results": results,
+            "total_count": len(results)
         }
     except Exception as e:
         logger.error(f"Error searching knowledge base: {e}")

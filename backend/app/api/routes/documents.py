@@ -6,6 +6,7 @@ from datetime import datetime
 import aiofiles
 import os
 import asyncio
+import time
 
 from app.models.schemas import (
     DocumentUploadRequest,
@@ -62,10 +63,19 @@ async def upload_documents(
             
             try:
                 file_content = await file.read()
+                content_type = file.content_type or "application/octet-stream"
+                
+                logger.info(f"=== STARTING DOCUMENT UPLOAD ===")
+                logger.info(f"Document ID: {document_id}")
+                logger.info(f"File: {file.filename}, Size: {len(file_content)} bytes, Type: {content_type}")
+                logger.info(f"Document type: {document_type}, Company: {company_name}")
+                logger.info(f"File content read successfully: {len(file_content)} bytes")
+                
                 file_path = os.path.join(upload_dir, f"{document_id}_{file.filename}")
                 
                 async with aiofiles.open(file_path, 'wb') as f:
                     await f.write(file_content)
+                logger.info(f"File saved locally to: {file_path}")
                 
                 parsed_filing_date = None
                 if filing_date:
@@ -88,9 +98,10 @@ async def upload_documents(
                 }
                 
                 logger.info(f"Starting document processing: {document_id}, type: {document_type}, file: {file.filename}")
+                logger.info(f"Metadata prepared: {metadata}")
+                logger.info(f"Content type: {content_type}")
                 
-                content_type = file.content_type or "application/octet-stream"
-                
+                logger.info(f"Creating async task for document processing...")
                 asyncio.create_task(
                     process_document_async(
                         document_processor, 
@@ -101,6 +112,7 @@ async def upload_documents(
                         metadata
                     )
                 )
+                logger.info(f"Async task created for document {document_id}")
                 
                 response = DocumentUploadResponse(
                     document_id=document_id,
@@ -137,7 +149,15 @@ async def process_document_async(
 ):
     """Asynchronously process document with Azure Document Intelligence"""
     try:
-        logger.info(f"Processing document {document_id} ({filename}) with Azure Document Intelligence")
+        logger.info(f"=== ASYNC DOCUMENT PROCESSING STARTED ===")
+        logger.info(f"Document ID: {document_id}")
+        logger.info(f"Filename: {filename}")
+        logger.info(f"Content type: {content_type}")
+        logger.info(f"Content size: {len(content)} bytes")
+        logger.info(f"Processing metadata: {metadata}")
+        
+        logger.info(f"Calling processor.process_document()...")
+        start_time = time.time()
         
         processed_doc = await processor.process_document(
             content=content,
@@ -146,16 +166,25 @@ async def process_document_async(
             metadata=metadata
         )
         
-        logger.info(f"Document {document_id} processed successfully: {processed_doc['processing_stats']}")
+        processing_time = time.time() - start_time
+        logger.info(f"=== DOCUMENT PROCESSING COMPLETED ===")
+        logger.info(f"Document ID: {document_id}")
+        logger.info(f"Processing time: {processing_time:.2f} seconds")
+        logger.info(f"Processing stats: {processed_doc['processing_stats']}")
         
         observability.track_document_processing_complete(
             document_id,
             processed_doc['processing_stats']['total_chunks'],
-            processed_doc['processing_stats']['metrics_extracted']
+            processing_time
         )
         
     except Exception as e:
-        logger.error(f"Error in async document processing for {document_id}: {e}")
+        logger.error(f"=== DOCUMENT PROCESSING FAILED ===")
+        logger.error(f"Document ID: {document_id}")
+        logger.error(f"Error: {e}")
+        logger.error(f"Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         observability.track_document_processing_error(document_id, str(e))
 
 @router.get("/", response_model=List[DocumentInfo])
