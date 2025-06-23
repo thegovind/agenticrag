@@ -17,6 +17,16 @@ try:
 except ImportError:
     OPENTELEMETRY_AVAILABLE = False
     logging.warning("OpenTelemetry packages not available. Tracing features will be limited.")
+    
+    # Mock classes for when OpenTelemetry is not available
+    class StatusCode:
+        OK = "OK"
+        ERROR = "ERROR"
+    
+    class Status:
+        def __init__(self, code, description=""):
+            self.code = code
+            self.description = description
 
 AZURE_MONITOR_AVAILABLE = False  # Temporarily disabled
 

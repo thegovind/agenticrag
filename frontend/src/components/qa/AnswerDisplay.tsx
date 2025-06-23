@@ -1,4 +1,6 @@
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -9,9 +11,14 @@ import { QAAnswer, QACitation } from './QAContainer';
 interface AnswerDisplayProps {
   answer: QAAnswer;
   onVerifySources: () => void;
+  isVerifyingSources?: boolean;
 }
 
-export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({ answer, onVerifySources }) => {
+export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({ 
+  answer, 
+  onVerifySources, 
+  isVerifyingSources = false 
+}) => {
   const getConfidenceColor = (score: number) => {
     if (score >= 0.8) return 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800';
     if (score >= 0.6) return 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:border-yellow-800';
@@ -71,9 +78,52 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({ answer, onVerifySo
       </CardHeader>
       
       <CardContent className="space-y-4">
-        <div className="prose prose-sm max-w-none">
-          <div className="whitespace-pre-wrap text-foreground leading-relaxed">
-            {answer.answer}
+        <div className="text-left max-w-none">
+          <div className="prose prose-sm prose-slate dark:prose-invert max-w-none text-left">
+            <ReactMarkdown 
+              remarkPlugins={[remarkGfm]}
+              components={{
+                // Customize components for better styling
+                p: ({ children }) => <p className="mb-4 text-foreground leading-relaxed text-left">{children}</p>,
+                h1: ({ children }) => <h1 className="text-xl font-bold mb-4 text-foreground text-left">{children}</h1>,
+                h2: ({ children }) => <h2 className="text-lg font-semibold mb-3 text-foreground text-left">{children}</h2>,
+                h3: ({ children }) => <h3 className="text-base font-medium mb-2 text-foreground text-left">{children}</h3>,
+                ul: ({ children }) => <ul className="list-disc pl-6 mb-4 text-foreground text-left">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal pl-6 mb-4 text-foreground text-left">{children}</ol>,
+                li: ({ children }) => <li className="mb-1 text-foreground text-left">{children}</li>,
+                blockquote: ({ children }) => (
+                  <blockquote className="border-l-4 border-muted-foreground/20 pl-4 italic mb-4 text-muted-foreground text-left">
+                    {children}
+                  </blockquote>
+                ),
+                code: ({ children, className }) => {
+                  const isInline = !className;
+                  return isInline ? (
+                    <code className="bg-muted px-1 py-0.5 rounded text-sm font-mono text-foreground">
+                      {children}
+                    </code>
+                  ) : (
+                    <code className={`${className} bg-muted p-2 rounded block text-sm font-mono text-foreground text-left overflow-x-auto`}>
+                      {children}
+                    </code>
+                  );
+                },
+                pre: ({ children }) => (
+                  <pre className="bg-muted p-3 rounded text-sm font-mono text-foreground text-left overflow-x-auto mb-4">
+                    {children}
+                  </pre>
+                ),
+                strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+                em: ({ children }) => <em className="italic text-foreground">{children}</em>,
+                a: ({ children, href }) => (
+                  <a href={href} className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline" target="_blank" rel="noopener noreferrer">
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {answer.answer}
+            </ReactMarkdown>
           </div>
         </div>
 
@@ -101,11 +151,37 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({ answer, onVerifySo
               variant="outline"
               size="sm"
               onClick={onVerifySources}
+              disabled={isVerifyingSources}
               className="text-xs"
             >
-              Verify Sources
+              {isVerifyingSources ? (
+                <div className="flex items-center space-x-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"></div>
+                  <span>Verifying Sources...</span>
+                </div>
+              ) : (
+                'Verify Sources'
+              )}
             </Button>
           </div>
+
+          {/* Enhanced progress indicator when verifying */}
+          {isVerifyingSources && (
+            <div className="bg-muted/50 p-3 rounded-lg border-l-4 border-primary">
+              <div className="flex items-center space-x-3">
+                <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent"></div>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-foreground">Verifying source credibility...</p>
+                  <p className="text-xs text-muted-foreground">
+                    Analyzing {answer.citations.length} sources for reliability and accuracy
+                  </p>
+                </div>
+              </div>
+              <div className="mt-2 w-full bg-muted rounded-full h-2">
+                <div className="bg-primary h-2 rounded-full animate-pulse" style={{width: '60%'}}></div>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
             <div className="bg-muted/30 p-2 rounded">

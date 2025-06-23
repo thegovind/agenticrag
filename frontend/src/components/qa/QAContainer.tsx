@@ -74,6 +74,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
   const [questions, setQuestions] = useState<QAQuestion[]>([]);
   const [answers, setAnswers] = useState<QAAnswer[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isVerifyingSourcesForAnswer, setIsVerifyingSourcesForAnswer] = useState<string | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
   const [selectedAnswer, setSelectedAnswer] = useState<QAAnswer | null>(null);
   const [showSourceVerification, setShowSourceVerification] = useState(false);
@@ -209,6 +210,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
   };
 
   const handleVerifySources = async (answer: QAAnswer) => {
+    setIsVerifyingSourcesForAnswer(answer.id);
     try {
       const verifiedSources: VerifiedSource[] = [];
       
@@ -238,6 +240,8 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
       setShowSourceVerification(true);
     } catch (error) {
       console.error('Error verifying sources:', error);
+    } finally {
+      setIsVerifyingSourcesForAnswer(null);
     }
   };
 
@@ -253,6 +257,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     setShowAgentStatus(false);
     setVerifiedSources([]);
     setDecomposedQuestions(null);
+    setIsVerifyingSourcesForAnswer(null);
   };
 
   const handleToggleAgentStatus = () => {
@@ -298,6 +303,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                         <AnswerDisplay
                           answer={answer}
                           onVerifySources={() => handleVerifySources(answer)}
+                          isVerifyingSources={isVerifyingSourcesForAnswer === answer.id}
                         />
                       )}
                     </div>
@@ -305,12 +311,18 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                 })}
                 
                 {isLoading && (
-                  <div className="bg-muted/30 p-4 rounded-lg">
-                    <div className="flex items-center space-x-2">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
-                      <span className="text-sm text-muted-foreground">
-                        Analyzing question and verifying sources...
-                      </span>
+                  <div className="bg-gradient-to-r from-muted/50 to-muted/30 p-6 rounded-lg border-l-4 border-primary shadow-sm">
+                    <div className="flex items-center space-x-4">
+                      <div className="animate-spin rounded-full h-6 w-6 border-3 border-primary border-t-transparent"></div>
+                      <div className="flex-1">
+                        <p className="text-base font-medium text-foreground">Processing your question...</p>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Searching through documents, analyzing context, and generating a comprehensive response
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 w-full bg-muted rounded-full h-2">
+                      <div className="bg-primary h-2 rounded-full animate-pulse transition-all duration-300" style={{width: '70%'}}></div>
                     </div>
                   </div>
                 )}
@@ -358,7 +370,6 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
             <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
               {showSourceVerification && selectedAnswer && (
                 <SourceVerification
-                  answer={selectedAnswer}
                   verifiedSources={verifiedSources}
                   onClose={() => setShowSourceVerification(false)}
                 />

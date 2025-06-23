@@ -472,8 +472,7 @@ class AzureServiceManager:
             )
             
             semantic_search = SemanticSearch(configurations=[semantic_config])
-            
-            # Create the index
+              # Create the index
             index = SearchIndex(
                 name=settings.AZURE_SEARCH_INDEX_NAME,
                 fields=fields,
@@ -489,12 +488,14 @@ class AzureServiceManager:
             logger.error(f"Failed to ensure search index exists: {e}")
             return False
 
-    async def get_embedding(self, text: str, model: str = "text-embedding-ada-002") -> List[float]:
+    async def get_embedding(self, text: str, model: str = None) -> List[float]:
         """Get embedding for text using Azure OpenAI"""
         try:
+            # Use deployment name from settings, not model name
+            deployment_name = model or settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME
             response = self.openai_client.embeddings.create(
                 input=text,
-                model=model
+                model=deployment_name
             )
             return response.data[0].embedding
         except Exception as e:

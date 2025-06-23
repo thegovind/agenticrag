@@ -3,18 +3,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import { X, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
-import { QAAnswer, VerifiedSource } from './QAContainer';
+import { VerifiedSource } from './QAContainer';
 
 interface SourceVerificationProps {
-  answer: QAAnswer;
   verifiedSources: VerifiedSource[];
   onClose: () => void;
 }
 
 export const SourceVerification: React.FC<SourceVerificationProps> = ({
-  answer,
   verifiedSources,
   onClose,
 }) => {
@@ -103,7 +100,7 @@ export const SourceVerification: React.FC<SourceVerificationProps> = ({
       <CardContent className="flex-1 overflow-hidden">
         <ScrollArea className="h-full">
           <div className="space-y-4">
-            {verifiedSources.map((source, index) => (
+            {verifiedSources.map((source) => (
               <div key={source.sourceId} className="border rounded-lg p-3 space-y-3">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 space-y-1">

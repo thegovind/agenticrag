@@ -65,7 +65,10 @@ async def ask_question(
             logger.info("Processing QA request with Azure AI Agent Service...")
             qa_result = await azure_ai_agent_service.process_qa_request(
                 question=request.question,
-                context=request.context or {},
+                context={
+                    **(request.context or {}),
+                    'kb_manager': kb_manager
+                },
                 verification_level=request.verification_level,
                 session_id=session_id,
                 model_config={
@@ -274,24 +277,25 @@ async def decompose_question(
         logger.error(f"Question decomposition failed for session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to decompose question: {str(e)}")
 
-@router.post("/verify-sources", response_model=SourceVerificationResponse)
-async def verify_sources(
-    request: SourceVerificationRequest,
+@router.post("/verify-sources")
+async def verify_sources_flexible(
+    request_data: dict,
     x_session_id: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None)
 ):
-    """Verify the credibility and trustworthiness of information sources"""
+    """Flexible verify sources endpoint that handles different payload formats"""
     start_time = time.time()
-    session_id = x_session_id or str(uuid.uuid4())
+    session_id = request_data.get("session_id") or x_session_id or str(uuid.uuid4())
     
     try:
         async with observability.trace_operation(
-            "source_verification",
+            "flexible_source_verification",
             session_id=session_id
         ) as span:
             
-            observability.track_request("qa_verify_sources", session_id=session_id)
-            logger.info(f"Source verification request for session {session_id}, {len(request.sources)} sources")
+            observability.track_request("qa_verify_sources_flexible", session_id=session_id)
+            logger.info(f"Flexible source verification request for session {session_id}")
+            logger.info(f"Request payload keys: {list(request_data.keys())}")
             
             azure_manager = AzureServiceManager()
             await azure_manager.initialize()
@@ -303,9 +307,42 @@ async def verify_sources(
             orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)
             azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
             
+            # Handle different payload formats
+            sources_dict = []
+            
+            # Check if it's the single source format (from frontend)
+            if "source_url" in request_data and "content" in request_data:
+                logger.info("Processing single source format")
+                source_dict = {
+                    "id": str(uuid.uuid4()),
+                    "url": request_data.get("source_url", ""),
+                    "title": request_data.get("title", "Document Source"),
+                    "content": request_data.get("content", ""),
+                    "metadata": {
+                        "source": request_data.get("source_url", ""),
+                        "verification_timestamp": time.time()
+                    }
+                }
+                sources_dict = [source_dict]
+                
+            # Check if it's the expected SourceVerificationRequest format
+            elif "sources" in request_data:
+                logger.info("Processing sources array format")
+                for source in request_data["sources"]:
+                    source_dict = {
+                        "id": source.get("id", str(uuid.uuid4())),
+                        "url": source.get("url", ""),
+                        "title": source.get("title", ""),
+                        "content": source.get("content", ""),
+                        "metadata": source.get("metadata", {})
+                    }
+                    sources_dict.append(source_dict)
+            else:
+                raise HTTPException(status_code=422, detail="Invalid payload format. Expected either 'source_url' and 'content' or 'sources' array.")
+            
             verification_result = await azure_ai_agent_service.verify_source_credibility(
-                sources=request.sources,
-                context=request.context or {},
+                sources=sources_dict,
+                context=request_data.get("context", {}),
                 session_id=session_id
             )
             
@@ -314,17 +351,32 @@ async def verify_sources(
             
             response_time = time.time() - start_time
             
-            response = SourceVerificationResponse(
-                verified_sources=verified_sources,
-                overall_credibility_score=overall_credibility,
-                verification_summary=f"Verified {len(verified_sources)} sources with average credibility score of {overall_credibility:.2f}",
-                session_id=session_id,
-                metadata={
-                    "sources_count": len(request.sources),
+            # Ensure all credibility scores are proper numbers
+            for source in verified_sources:
+                score = source.get("credibility_score", 0.0)
+                if score is None or str(score).lower() == 'nan':
+                    source["credibility_score"] = 0.0
+                    source["credibility_percentage"] = 0.0
+                    source["verification_status"] = "unverified"
+                
+            overall_credibility = overall_credibility or 0.0
+            if str(overall_credibility).lower() == 'nan':
+                overall_credibility = 0.0
+            
+            response = {
+                "verified_sources": verified_sources,
+                "overall_credibility_score": round(overall_credibility, 3),  # Ensure it's a proper number
+                "verification_summary": f"Verified {len(verified_sources)} source(s) with average credibility score of {overall_credibility:.1%}",
+                "session_id": session_id,
+                "metadata": {
+                    "sources_count": len(sources_dict),
                     "verified_count": len([s for s in verified_sources if s["verification_status"] == "verified"]),
-                    "response_time": response_time
+                    "questionable_count": len([s for s in verified_sources if s["verification_status"] == "questionable"]),
+                    "unverified_count": len([s for s in verified_sources if s["verification_status"] == "unverified"]),
+                    "response_time": round(response_time, 3),
+                    "average_credibility_percentage": round(overall_credibility * 100, 1)
                 }
-            )
+            }
             
             span.set_attribute("response.sources_verified", len(verified_sources))
             span.set_attribute("response.overall_credibility", overall_credibility)
@@ -340,8 +392,179 @@ async def verify_sources(
             user_id=x_user_id
         )
         
-        logger.error(f"Source verification failed for session {session_id}: {e}")
+        logger.error(f"Flexible source verification failed for session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to verify sources: {str(e)}")
+
+@router.post("/verify-citations", response_model=SourceVerificationResponse)
+async def verify_citations(
+    citations: List[Citation],
+    x_session_id: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None)
+):
+    """Verify the credibility of Citation objects (alternative endpoint for frontend compatibility)"""
+    start_time = time.time()
+    session_id = x_session_id or str(uuid.uuid4())
+    
+    try:
+        async with observability.trace_operation(
+            "citation_verification",
+            session_id=session_id
+        ) as span:
+            
+            observability.track_request("qa_verify_citations", session_id=session_id)
+            logger.info(f"Citation verification request for session {session_id}, {len(citations)} citations")
+            
+            azure_manager = AzureServiceManager()
+            await azure_manager.initialize()
+            
+            from app.services.knowledge_base_manager import AdaptiveKnowledgeBaseManager
+            kb_manager = AdaptiveKnowledgeBaseManager(azure_manager)
+            
+            from app.services.multi_agent_orchestrator import MultiAgentOrchestrator
+            orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)
+            azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
+            
+            # Convert Citation objects to dictionaries for processing
+            sources_dict = []
+            for citation in citations:
+                source_dict = {
+                    "id": citation.id,
+                    "url": citation.url or "",
+                    "title": citation.document_title,
+                    "content": citation.content,
+                    "metadata": {
+                        "document_id": citation.document_id,
+                        "page_number": citation.page_number,
+                        "section_title": citation.section_title,
+                        "credibility_score": citation.credibility_score
+                    }
+                }
+                sources_dict.append(source_dict)
+            
+            verification_result = await azure_ai_agent_service.verify_source_credibility(
+                sources=sources_dict,
+                context={},
+                session_id=session_id
+            )
+            
+            verified_sources = verification_result.get("verified_sources", [])
+            overall_credibility = verification_result.get("overall_credibility_score", 0.5)
+            
+            response_time = time.time() - start_time
+            
+            response = SourceVerificationResponse(
+                verified_sources=verified_sources,
+                overall_credibility_score=overall_credibility,
+                verification_summary=f"Verified {len(verified_sources)} citations with average credibility score of {overall_credibility:.2f}",
+                session_id=session_id,
+                metadata={
+                    "sources_count": len(citations),
+                    "verified_count": len([s for s in verified_sources if s["verification_status"] == "verified"]),
+                    "response_time": response_time
+                }
+            )
+            
+            span.set_attribute("response.sources_verified", len(verified_sources))
+            span.set_attribute("response.overall_credibility", overall_credibility)
+            
+            return response
+        
+    except Exception as e:
+        observability.track_error(
+            error_type=type(e).__name__,
+            endpoint="/api/v1/qa/verify-citations",
+            error_message=str(e),
+            session_id=session_id,
+            user_id=x_user_id
+        )
+        
+        logger.error(f"Citation verification failed for session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to verify citations: {str(e)}")
+
+@router.post("/verify-source", response_model=SourceVerificationResponse)
+async def verify_single_source(
+    source_url: str,
+    content: str,
+    session_id: str,
+    title: Optional[str] = None,
+    x_session_id: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None)
+):
+    """Verify a single source (matches the frontend payload format)"""
+    start_time = time.time()
+    session_id = session_id or x_session_id or str(uuid.uuid4())
+    
+    try:
+        async with observability.trace_operation(
+            "single_source_verification",
+            session_id=session_id
+        ) as span:
+            
+            observability.track_request("qa_verify_single_source", session_id=session_id)
+            logger.info(f"Single source verification request for session {session_id}")
+            
+            azure_manager = AzureServiceManager()
+            await azure_manager.initialize()
+            
+            from app.services.knowledge_base_manager import AdaptiveKnowledgeBaseManager
+            kb_manager = AdaptiveKnowledgeBaseManager(azure_manager)
+            
+            from app.services.multi_agent_orchestrator import MultiAgentOrchestrator
+            orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)
+            azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
+            
+            # Convert single source to the expected format
+            source_dict = {
+                "id": str(uuid.uuid4()),
+                "url": source_url,
+                "title": title or "Document Source",
+                "content": content,
+                "metadata": {
+                    "source": source_url,
+                    "verification_timestamp": time.time()
+                }
+            }
+            
+            verification_result = await azure_ai_agent_service.verify_source_credibility(
+                sources=[source_dict],
+                context={},
+                session_id=session_id
+            )
+            
+            verified_sources = verification_result.get("verified_sources", [])
+            overall_credibility = verification_result.get("overall_credibility_score", 0.5)
+            
+            response_time = time.time() - start_time
+            
+            response = SourceVerificationResponse(
+                verified_sources=verified_sources,
+                overall_credibility_score=overall_credibility,
+                verification_summary=f"Verified source with credibility score of {overall_credibility:.2f}",
+                session_id=session_id,
+                metadata={
+                    "sources_count": 1,
+                    "verified_count": len([s for s in verified_sources if s["verification_status"] == "verified"]),
+                    "response_time": response_time,
+                    "source_type": "single_source"
+                }
+            )
+            
+            span.set_attribute("response.sources_verified", len(verified_sources))
+            span.set_attribute("response.overall_credibility", overall_credibility)
+            
+            return response
+        
+    except Exception as e:
+        observability.track_error(
+            error_type=type(e).__name__,
+            endpoint="/api/v1/qa/verify-source",
+            error_message=str(e),
+            session_id=session_id,
+            user_id=x_user_id
+        )
+        
+        logger.error(f"Single source verification failed for session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to verify source: {str(e)}")
 
 @router.get("/capabilities")
 async def get_qa_capabilities():

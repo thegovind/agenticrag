@@ -377,7 +377,7 @@ class AdaptiveKnowledgeBaseManager:
             """
             
             response = self.azure_manager.openai_client.chat.completions.create(
-                model="gpt-4",
+                model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=200
@@ -721,7 +721,7 @@ class AdaptiveKnowledgeBaseManager:
             """
             
             response = self.azure_manager.openai_client.chat.completions.create(
-                model="gpt-4",
+                model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=100
