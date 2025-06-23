@@ -149,7 +149,7 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
             <h4 className="text-sm font-medium text-foreground">Research Sub-Questions</h4>
             <div className="space-y-1">
               {answer.subQuestions.map((subQuestion, index) => (
-                <div key={index} className="text-sm text-muted-foreground bg-muted/30 p-2 rounded">
+                <div key={index} className="text-sm text-muted-foreground bg-muted/30 p-2 rounded text-left">
                   {index + 1}. {subQuestion}
                 </div>
               ))}

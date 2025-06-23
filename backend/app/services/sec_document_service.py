@@ -17,6 +17,7 @@ from app.services.azure_services import AzureServiceManager
 from app.core.config import settings
 from app.core.observability import observability
 from app.services.document_processor import DocumentChunk
+from app.services.credibility_assessor import CredibilityAssessor
 from app.utils.chunker import DocumentChunker
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,10 @@ class SECDocumentService:
     """
     Service for retrieving and processing SEC documents using edgartools
     """
+    
     def __init__(self, azure_manager: AzureServiceManager):
         self.azure_manager = azure_manager
+        self.credibility_assessor = CredibilityAssessor(azure_manager)
         self.chunker = DocumentChunker(
             chunk_size=settings.chunk_size
         )
@@ -376,13 +379,14 @@ class SECDocumentService:
                 "accession_number": accession_number,
                 "document_type": "SEC Filing",
                 "source": "SEC EDGAR",
-                "file_size": getattr(filing, 'size', None),
-                "document_url": getattr(filing.document, 'url', '') if hasattr(filing, 'document') and filing.document else ''
+                "file_size": getattr(filing, 'size', None),                "document_url": getattr(filing.document, 'url', '') if hasattr(filing, 'document') and filing.document else ''
             }
             
             logger.info(f"Document metadata: {metadata}")
             
-            # Get the document content
+            # Ensure document_id is set
+            if not document_id:
+                document_id = f"{ticker}_{accession_number}_{filing.form}"            # Get the document content
             # edgartools provides different ways to get content
             if hasattr(filing, 'text'):
                 content = filing.text()
@@ -394,7 +398,6 @@ class SECDocumentService:
             logger.info(f"Retrieved content length: {len(content)} characters")
             
             # Process the document into chunks
-            document_id = document_id or f"{ticker}_{accession_number}_{filing.form}"
             chunks = await self._process_content_with_md2chunks(
                 content, document_id, metadata
             )
@@ -576,25 +579,83 @@ class SECDocumentService:
     
     def _extract_section_info(self, chunk_content: str) -> Dict[str, str]:
         """
-        Extract section information from chunk content
+        Extract section information from chunk content using targeted Item-based regex
         """
-        # SEC document section patterns
-        section_patterns = {
-            r'(?i)item\s+1[^0-9].*business': 'business_overview',
-            r'(?i)item\s+1a.*risk\s+factors': 'risk_factors',
-            r'(?i)item\s+2.*properties': 'properties',
-            r'(?i)item\s+3.*legal': 'legal_proceedings',
-            r'(?i)item\s+7.*management.*discussion': 'mda',
-            r'(?i)item\s+8.*financial\s+statements': 'financial_statements',
-            r'(?i)consolidated\s+balance\s+sheets?': 'balance_sheet',
-            r'(?i)consolidated\s+income\s+statements?': 'income_statement',
-            r'(?i)consolidated\s+cash\s+flows?': 'cash_flow',
-            r'(?i)notes?\s+to.*financial\s+statements?': 'financial_notes'        }
+        import re
         
-        for pattern, section_type in section_patterns.items():
-            if re.search(pattern, chunk_content[:200]):  # Check first 200 chars
+        # Primary regex to detect Item sections in SEC filings
+        # Handles various formatting: "Item 1", "ITEM 1", with HTML entities, periods, etc.
+        item_regex = re.compile(r'(>Item(\s|&#160;|&nbsp;)(1A|1B|1C|1D|2|3|4|5|6|7A|7|8|9A|9B|9C|9|10|11|12|13|14|15|16)\.?)|(ITEM\s+(1A|1B|1C|1D|2|3|4|5|6|7A|7|8|9A|9B|9C|9|10|11|12|13|14|15|16))', re.IGNORECASE)
+        
+        # Look for Item sections in the first 1000 characters of the chunk
+        check_content = chunk_content[:1000]
+        matches = list(item_regex.finditer(check_content))
+        
+        if matches:
+            # Extract the item number from the first match
+            match = matches[0]
+            item_text = match.group(0)
+            
+            # Extract item number (handle both group patterns)
+            item_num = None
+            if match.group(3):  # From first pattern (>Item...)
+                item_num = match.group(3)
+            elif match.group(5):  # From second pattern (ITEM...)
+                item_num = match.group(5)
+            
+            if item_num:
+                # Map Item numbers to section types
+                item_mapping = {
+                    '1': 'business_overview',
+                    '1A': 'risk_factors',
+                    '1B': 'unresolved_staff_comments', 
+                    '1C': 'cybersecurity',
+                    '2': 'properties',
+                    '3': 'legal_proceedings',
+                    '4': 'mine_safety',
+                    '5': 'market_for_equity',
+                    '6': 'selected_financial_data',
+                    '7': 'mda',
+                    '7A': 'market_risk_disclosures',
+                    '8': 'financial_statements',
+                    '9': 'changes_in_accountants',
+                    '9A': 'controls_and_procedures',
+                    '9B': 'other_information',
+                    '9C': 'disclosure_regarding_foreign_jurisdictions',
+                    '10': 'directors_and_officers',
+                    '11': 'executive_compensation',
+                    '12': 'security_ownership',
+                    '13': 'related_party_transactions',
+                    '14': 'principal_accountant_fees',
+                    '15': 'exhibits',
+                    '16': 'form_10k_summary'
+                }
+                
+                section_type = item_mapping.get(item_num, 'general')
+                logger.debug(f"Detected Item {item_num} -> {section_type} from: {item_text[:50]}...")
                 return {"section_type": section_type}
         
+        # Secondary patterns for financial statements and other specific sections
+        financial_patterns = {
+            r'(?i)consolidated\s+balance\s+sheets?': 'balance_sheet',
+            r'(?i)consolidated\s+statements?\s+of\s+(income|operations|earnings)': 'income_statement',
+            r'(?i)consolidated\s+statements?\s+of\s+cash\s+flows?': 'cash_flow',
+            r'(?i)consolidated\s+statements?\s+of.*equity': 'equity_statement',
+            r'(?i)consolidated\s+statements?\s+of.*comprehensive': 'comprehensive_income',
+            r'(?i)notes?\s+to.*consolidated.*financial\s+statements?': 'financial_notes',
+            r'(?i)notes?\s+to.*financial\s+statements?': 'financial_notes',
+            r'(?i)management.*discussion.*analysis': 'mda',
+            r'(?i)table\s+of\s+contents': 'table_of_contents',
+            r'(?i)signatures?\s*$': 'signatures'
+        }
+        
+        # Check financial statement patterns
+        for pattern, section_type in financial_patterns.items():
+            if re.search(pattern, check_content):
+                logger.debug(f"Detected financial section: {section_type}")
+                return {"section_type": section_type}
+        
+        # If no specific pattern matches, return general
         return {"section_type": "general"}
     
     async def _generate_embeddings_for_chunks(self, chunks: List[DocumentChunk]):
@@ -603,7 +664,6 @@ class SECDocumentService:
         """
         try:
             logger.info(f"Generating embeddings for {len(chunks)} chunks")
-            
             for i, chunk in enumerate(chunks):
                 try:
                     embedding = await self.azure_manager.get_embedding(chunk.content)
@@ -618,7 +678,7 @@ class SECDocumentService:
     
     async def _prepare_search_documents(self, chunks: List[DocumentChunk]) -> List[Dict[str, Any]]:
         """
-        Prepare documents for Azure Search indexing with proper schema mapping
+        Prepare documents for Azure Search indexing with proper schema mapping and credibility assessment
         """
         search_documents = []
         
@@ -628,6 +688,20 @@ class SECDocumentService:
                 
             # Extract metadata
             metadata = chunk.metadata
+            
+            # Assess credibility of the chunk using the credibility assessor
+            try:
+                # Create a processed document structure for credibility assessment
+                processed_doc = {
+                    "extracted_content": {"content": chunk.content},
+                    "metadata": metadata
+                }
+                source_url = metadata.get('source', 'SEC EDGAR')
+                credibility_score = await self.credibility_assessor.assess_credibility(processed_doc, source_url)
+                logger.debug(f"Assessed credibility score: {credibility_score:.3f} for chunk {chunk.chunk_id}")
+            except Exception as e:
+                logger.warning(f"Failed to assess credibility for chunk {chunk.chunk_id}: {e}")
+                credibility_score = 0.8  # Higher default for SEC documents
             
             # Use accession number as document_id for grouping
             document_id = metadata.get('accession_number', chunk.chunk_id.split('_')[0] if '_' in chunk.chunk_id else chunk.chunk_id)
@@ -644,7 +718,7 @@ class SECDocumentService:
                 "filing_date": metadata.get('filing_date', ''),
                 "section_type": metadata.get('section_type', 'general'),
                 "page_number": metadata.get('page_number', 0),
-                "credibility_score": metadata.get('credibility_score', 0.5),
+                "credibility_score": credibility_score,  # Use assessed credibility score
                 "processed_at": datetime.now().isoformat(),
                 "citation_info": json.dumps({
                     "ticker": metadata.get('ticker', ''),
@@ -724,8 +798,7 @@ class SECDocumentService:
                     file_size=getattr(filing, 'size', None)
                 )
                 documents.append(doc_info)
-                
-                # Stop if we have enough results
+                  # Stop if we have enough results
                 if len(documents) >= limit:
                     break
             

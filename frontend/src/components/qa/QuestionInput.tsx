@@ -28,6 +28,17 @@ export const QuestionInput: React.FC<QuestionInputProps> = ({ onAskQuestion, dis
     }
   };
 
+  const handleExampleClick = (exampleQuestion: string) => {
+    setQuestion(exampleQuestion);
+  };
+
+  const exampleQuestions = [
+    "What are the key financial risks mentioned in Apple's latest 10-K filing?",
+    "Compare and Contrast the Risk factors between Apple and Microsoft for 2023",
+    "How has Microsoft's revenue growth compared to industry benchmarks over the past 3 years?",
+    "What regulatory compliance issues are affecting the banking sector according to recent reports?"
+  ];
+
   const getVerificationDescription = (level: string) => {
     switch (level) {
       case 'basic':
@@ -131,13 +142,24 @@ export const QuestionInput: React.FC<QuestionInputProps> = ({ onAskQuestion, dis
         {disabled ? 'Processing...' : 'Ask Question'}
       </Button>
 
-      <div className="text-xs text-muted-foreground space-y-1">
+      <div className="text-xs text-muted-foreground space-y-2">
         <p><strong>Example questions:</strong></p>
-        <ul className="list-disc list-inside space-y-1 ml-2">
-          <li>What are the key financial risks mentioned in Apple's latest 10-K filing?</li>
-          <li>How has Microsoft's revenue growth compared to industry benchmarks over the past 3 years?</li>
-          <li>What regulatory compliance issues are affecting the banking sector according to recent reports?</li>
-        </ul>
+        <div className="space-y-1 ml-2">
+          {exampleQuestions.map((example, index) => (
+            <button
+              key={index}
+              type="button"
+              onClick={() => handleExampleClick(example)}
+              disabled={disabled}
+              className="block text-left text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              • {example}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground mt-2 italic">
+          Click any example above to populate the question field
+        </p>
       </div>
     </form>
   );

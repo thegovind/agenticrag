@@ -284,9 +284,8 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                           </span>
                           <span className="text-xs text-muted-foreground">
                             {question.timestamp.toLocaleTimeString()}
-                          </span>
-                        </div>
-                        <p className="text-foreground">{question.question}</p>
+                          </span>                        </div>
+                        <p className="text-foreground text-left">{question.question}</p>
                         <div className="flex gap-2 mt-2">
                           <button
                             onClick={() => handleDecomposeQuestion(question.question)}

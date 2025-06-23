@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -405,29 +406,107 @@ class AzureAIAgentService:
                 search_results = await kb_manager.search_knowledge_base(
                     query=question,
                     top_k=search_config["top_k"],
-                    filters=context.get('filters')
-                )
+                    filters=context.get('filters')                )
                 
                 logger.info(f"Retrieved {len(search_results)} relevant documents from vector store (requested: {search_config['top_k']} for {verification_level})")
                 
-                # Step 3: Handle question decomposition for comprehensive verification
+                # Step 3: Enhanced question decomposition and context gathering
                 sub_questions = []
-                if verification_level == "comprehensive":
+                additional_search_results = []
+                
+                # Detect if this is a comparative question or complex analysis
+                is_comparative = any(word in question.lower() for word in [
+                    'compare', 'versus', 'vs', 'contrast', 'difference', 'between', 
+                    'and', 'both', 'either', 'each'
+                ])
+                
+                is_complex = len(question.split()) > 10 or any(word in question.lower() for word in [
+                    'analyze', 'analysis', 'comprehensive', 'detailed', 'evaluate', 
+                    'assessment', 'review', 'examination'
+                ])
+                
+                # Enhanced logging for decomposition decision
+                logger.info(f"")
+                logger.info(f"🧠 QUESTION ANALYSIS:")
+                logger.info(f"📝 Question: '{question}'")
+                logger.info(f"🔄 Comparative question detected: {is_comparative}")
+                logger.info(f"🔍 Complex question detected: {is_complex}")
+                logger.info(f"📊 Verification level: {verification_level}")
+                logger.info(f"🎯 Question decomposition will be used: {is_comparative or verification_level == 'comprehensive' or is_complex}")
+                
+                # Use decomposition for comparative questions or comprehensive verification
+                if is_comparative or verification_level == "comprehensive" or is_complex:
                     try:
+                        logger.info(f"Detected {'comparative' if is_comparative else 'complex'} question, performing decomposition")
                         decomp_result = await self.decompose_complex_question(question, context, session_id, model_config)
                         sub_questions = decomp_result.get("sub_questions", [])
-                        logger.info(f"Decomposed question into {len(sub_questions)} sub-questions for comprehensive analysis")
+                        logger.info(f"Decomposed question into {len(sub_questions)} sub-questions")
+                        
+                        # Execute additional searches for each sub-question if we have them
+                        if sub_questions:
+                            additional_search_results = await self._execute_sub_question_searches(
+                                sub_questions, 
+                                kb_manager, 
+                                top_k=search_config["top_k"] // 2  # Use half the top_k for each sub-question
+                            )
+                            logger.info(f"Sub-question searches returned {len(additional_search_results)} additional documents")
                     except Exception as e:
                         logger.warning(f"Question decomposition failed: {e}")
                         sub_questions = []
+                  # Combine original search results with sub-question results
+                all_search_results = search_results.copy()
                 
-                logger.info(f"Retrieved {len(search_results)} relevant documents from vector store")
+                # Add additional results from sub-questions, avoiding duplicates
+                seen_doc_ids = {result.get('id') or result.get('document_id', f"doc_{i}") for i, result in enumerate(search_results)}
+                additional_unique_docs = 0
                 
-                # Step 2: Build enriched context with retrieved documents
+                for result in additional_search_results:
+                    doc_id = result.get('id') or result.get('document_id', f"additional_doc_{len(all_search_results)}")
+                    if doc_id not in seen_doc_ids:
+                        all_search_results.append(result)
+                        seen_doc_ids.add(doc_id)
+                        additional_unique_docs += 1
+                
+                # Enhanced logging for context aggregation
+                logger.info(f"")
+                logger.info(f"📋 CONTEXT AGGREGATION SUMMARY:")
+                logger.info(f"🔍 Original query search results: {len(search_results)} documents")
+                if sub_questions:
+                    logger.info(f"🔎 Sub-question searches executed: {len(sub_questions)} searches")
+                    logger.info(f"📊 Total documents from sub-questions: {len(additional_search_results)}")
+                    logger.info(f"➕ Additional unique documents added: {additional_unique_docs}")
+                    logger.info(f"📄 TOTAL CONTEXT SIZE: {len(all_search_results)} documents")
+                    logger.info(f"🧮 Context multiplication: {len(search_results)} → {len(all_search_results)} ({(len(all_search_results)/len(search_results)):.1f}x increase)" if search_results else "No original results to compare")
+                else:
+                    logger.info(f"📄 TOTAL CONTEXT SIZE: {len(all_search_results)} documents (no decomposition)")
+                
+                # Analyze context composition by company
+                company_breakdown = {}
+                sub_question_breakdown = {}
+                
+                for result in all_search_results:
+                    company = result.get('company', 'Unknown')
+                    company_breakdown[company] = company_breakdown.get(company, 0) + 1
+                    
+                    if result.get('sub_question_source'):
+                        sq_source = result.get('sub_question_source', 'Original Query')
+                        sub_question_breakdown[sq_source] = sub_question_breakdown.get(sq_source, 0) + 1
+                
+                if company_breakdown:
+                    logger.info(f"🏢 Documents by company: {dict(sorted(company_breakdown.items()))}")
+                
+                if sub_question_breakdown:
+                    logger.info(f"❓ Documents by source:")
+                    logger.info(f"   Original query: {len(search_results)} docs")
+                    for sq, count in sub_question_breakdown.items():
+                        logger.info(f"   '{sq[:60]}...': {count} docs")
+                logger.info(f"")
+                
+                # Step 4: Build enriched context with all retrieved documents
                 retrieved_context = ""
                 sources = []
                 
-                for i, result in enumerate(search_results):
+                for i, result in enumerate(all_search_results):
                     retrieved_context += f"\n\n--- Document {i+1} ---\n"
                     retrieved_context += f"Title: {result.get('title', 'Unknown')}\n"
                     retrieved_context += f"Company: {result.get('company', 'Unknown')}\n"
@@ -445,6 +524,10 @@ class AzureAIAgentService:
                     else:
                         confidence_level = "low"
                     
+                    # Add source information for additional context
+                    if hasattr(result, 'sub_question_source'):
+                        retrieved_context += f"Sub-question Source: {result.get('sub_question_source', '')}\n"
+                    
                     sources.append({
                         "id": result.get('id', f"doc_{i+1}"),
                         "content": result.get('content', ''),
@@ -454,13 +537,16 @@ class AzureAIAgentService:
                         "document_type": result.get('document_type', ''),
                         "company": result.get('company', ''),
                         "page_number": result.get('page_number'),
-                        "section_title": result.get('section_title', ''),                        "confidence": confidence_level,
+                        "section_title": result.get('section_title', ''),
+                        "confidence": confidence_level,
                         "url": result.get('source_url', ''),
                         "credibility_score": credibility_score,
-                        "relevance_explanation": result.get('relevance_explanation', '')
+                        "relevance_explanation": result.get('relevance_explanation', ''),
+                        "sub_question_source": result.get('sub_question_source', '')
                     })
                 
-                span.set_attribute("retrieved_documents", len(search_results))
+                span.set_attribute("retrieved_documents", len(all_search_results))
+                span.set_attribute("sub_questions_count", len(sub_questions))
                 
                 # Step 4: Create verification level-specific QA agent with deployment name from frontend
                 # Extract string value from verification_level (in case it's an enum)
@@ -481,8 +567,7 @@ class AzureAIAgentService:
                 # Create thread using Azure AI Projects SDK
                 thread = self.client.agents.threads.create()
                 thread_id = thread.id
-                
-                # Step 4: Prepare enhanced context with retrieved documents
+                  # Step 4: Prepare enhanced context with retrieved documents
                 enhanced_context = {
                     **context,
                     "verification_level": verification_level,
@@ -491,41 +576,82 @@ class AzureAIAgentService:
                     "source_count": len(sources)
                 }
                 
-                # Step 5: Create enhanced message with retrieved context
+                # Step 5: Create enhanced message with retrieved context and sub-questions
+                sub_questions_context = ""
+                if sub_questions:
+                    sub_questions_context = f"\n\nThis question was decomposed into the following sub-questions:\n"
+                    for i, sq in enumerate(sub_questions, 1):
+                        sub_questions_context += f"{i}. {sq}\n"
+                    sub_questions_context += "\nPlease ensure your answer addresses all aspects covered by these sub-questions.\n"
+                
                 enhanced_message = f"""
                 Context from Financial Document Database:
                 {retrieved_context}
-                
+                {sub_questions_context}
                 ---
                 
                 User Question: {question}
                 
                 Please provide a comprehensive answer based on the retrieved financial documents above. 
                 Include specific citations and assess the confidence level of your answer based on the source quality.
+                For comparative questions, ensure you provide data for ALL entities being compared.
                 """
+                  # Log final context size being sent to LLM
+                context_char_count = len(retrieved_context)
+                total_message_char_count = len(enhanced_message)
+                logger.info(f"")
+                logger.info(f"💬 FINAL LLM CONTEXT:")
+                logger.info(f"📄 Documents in context: {len(all_search_results)}")
+                logger.info(f"📊 Context character count: {context_char_count:,} characters")
+                logger.info(f"💭 Total message to LLM: {total_message_char_count:,} characters")
+                logger.info(f"❓ Sub-questions included: {len(sub_questions)}")
+                logger.info(f"🎯 Ready to send comprehensive context to {chat_deployment} model")
+                logger.info(f"")
                 
                 result = await self.run_agent_conversation(
                     agent_id=qa_agent.id,
                     thread_id=thread_id,
                     message=enhanced_message,
-                    context=enhanced_context                )
+                    context=enhanced_context
+                )
+                  # Calculate actual overall credibility score based on source scores
+                if sources:
+                    total_credibility = sum(s.get('credibility_score', 0.5) for s in sources)
+                    calculated_overall_credibility = total_credibility / len(sources)
+                    
+                    # Count high credibility sources
+                    high_credibility_sources = [s for s in sources if s.get('credibility_score', 0) >= 0.6]
+                    high_credibility_count = len(high_credibility_sources)
+                    
+                    # If all sources meet high threshold, use the average of high credibility sources
+                    if high_credibility_count == len(sources) and high_credibility_sources:
+                        high_credibility_avg = sum(s.get('credibility_score', 0) for s in high_credibility_sources) / len(high_credibility_sources)
+                        final_confidence_score = high_credibility_avg
+                    else:
+                        final_confidence_score = calculated_overall_credibility
+                else:
+                    final_confidence_score = 0.5
+                    high_credibility_count = 0
                 
                 return {
                     "answer": result.response,
-                    "confidence_score": 0.8,  # Could be enhanced with source quality analysis
+                    "confidence_score": final_confidence_score,  # Use calculated credibility instead of hardcoded 0.8
                     "sources": sources,
                     "sub_questions": sub_questions,
                     "verification_details": {
                         "verification_level": verification_level,
                         "agent_id": qa_agent.id,
                         "thread_id": thread_id,
-                        "documents_retrieved": len(search_results),
+                        "documents_retrieved": len(all_search_results),
+                        "original_search_count": len(search_results),
+                        "sub_question_search_count": len(additional_search_results),
                         "vector_search_used": True,
                         "sources_verified": len([s for s in sources if s.get('credibility_score', 0) >= 0.6]),
                         "total_sources": len(sources),
-                        "verification_summary": f"Retrieved {len(search_results)} documents from vector store using {verification_level} verification (top_k={search_config['top_k']}). {len([s for s in sources if s.get('credibility_score', 0) >= 0.6])} sources meet high credibility threshold.",
+                        "verification_summary": f"Retrieved {len(all_search_results)} total documents ({len(search_results)} from original query + {len(additional_search_results)} from {len(sub_questions)} sub-questions) using {verification_level} verification. {high_credibility_count} sources meet high credibility threshold (≥60%).",
                         "verification_status": "completed" if sources else "no_sources",
-                        "chat_model_used": chat_deployment
+                        "chat_model_used": chat_deployment,
+                        "decomposition_used": len(sub_questions) > 0
                     }
                 }
                 
@@ -547,14 +673,27 @@ class AzureAIAgentService:
                 decomposition_agent = await self.find_or_create_agent(
                     agent_name="Question_Decomposition_Agent",
                     instructions="""
-                    You are a financial question decomposition expert. Your task is to break down complex financial questions into smaller, researchable sub-questions.
+                    You are a financial question decomposition expert. Your task is to break down complex financial questions into smaller, researchable sub-questions that can be executed independently.
                     
                     Guidelines:
-                    1. Identify the main components of the complex question
-                    2. Break it down into 3-7 specific, actionable sub-questions
-                    3. Ensure each sub-question can be researched independently
-                    4. Maintain logical flow and dependencies between sub-questions
-                    5. Focus on financial analysis, data requirements, and research needs
+                    1. Identify comparative questions (e.g., "Compare X and Y") and create separate queries for each entity
+                    2. For each entity/company mentioned, create specific sub-questions
+                    3. Break down complex analysis requests into component parts
+                    4. Ensure each sub-question can be researched independently using document search
+                    5. For comparative questions, ensure you have sub-questions for EACH entity being compared
+                    6. Focus on financial analysis, data requirements, and research needs
+                    
+                    Examples:
+                    - "Compare Apple and Microsoft risk factors" should become:
+                      1. What are Apple's main risk factors in their latest financial filings?
+                      2. What are Microsoft's main risk factors in their latest financial filings?
+                      3. What are the key differences between Apple and Microsoft risk profiles?
+                    
+                    - "Analyze Tesla's financial performance vs competitors" should become:
+                      1. What is Tesla's recent financial performance (revenue, profit, growth)?
+                      2. Who are Tesla's main competitors in the automotive/EV space?
+                      3. What is the financial performance of Tesla's key competitors?
+                      4. How does Tesla's performance compare to industry benchmarks?
                     
                     Format your response as:
                     Sub-questions:
@@ -562,7 +701,7 @@ class AzureAIAgentService:
                     2. [Second sub-question]
                     ...
                     
-                    Reasoning: [Explain your decomposition approach]
+                    Reasoning: [Explain your decomposition approach and why these sub-questions will gather comprehensive data]
                     """,
                     model_deployment=chat_deployment
                 )
@@ -772,15 +911,29 @@ class AzureAIAgentService:
                     }
                     
                     verified_sources.append(verified_source)
-                    overall_credibility += credibility_score
-                
+                    overall_credibility += credibility_score                
                 if verified_sources:
                     overall_credibility = overall_credibility / len(verified_sources)
+                    
+                    # Count sources meeting high credibility threshold (>= 0.6)
+                    high_credibility_sources = [s for s in verified_sources if s.get('credibility_score', 0) >= 0.6]
+                    high_credibility_count = len(high_credibility_sources)
+                    
+                    # Calculate average credibility of only high-credibility sources for better representation
+                    if high_credibility_sources:
+                        high_credibility_avg = sum(s.get('credibility_score', 0) for s in high_credibility_sources) / len(high_credibility_sources)
+                        # Use the higher of overall average or high-credibility average for final score
+                        final_credibility_score = max(overall_credibility, high_credibility_avg)
+                    else:
+                        final_credibility_score = overall_credibility
+                else:
+                    final_credibility_score = 0.5
+                    high_credibility_count = 0
                 
                 return {
                     "verified_sources": verified_sources,
-                    "overall_credibility_score": overall_credibility,
-                    "verification_summary": f"Verified {len(verified_sources)} sources with average credibility score of {overall_credibility:.2f}",
+                    "overall_credibility_score": final_credibility_score,
+                    "verification_summary": f"Verified {len(verified_sources)} sources with average credibility score of {final_credibility_score:.2f}. {high_credibility_count} sources meet high credibility threshold (≥60%).",
                     "agent_id": verification_agent.id,
                     "thread_id": thread_id
                 }
@@ -864,20 +1017,31 @@ class AzureAIAgentService:
                 "enable_decomposition": True,
                 "enable_cross_referencing": True,
                 "enable_conflict_analysis": True,
-                "enable_limitation_analysis": True
-            }
+                "enable_limitation_analysis": True            }
         }
         
         config = verification_configs.get(verification_level.lower(), verification_configs["thorough"])
         logger.info(f"Verification level '{verification_level}' mapped to config: {config}")
         return config
-
+        
     def _get_agent_instructions_for_verification_level(self, verification_level: str) -> str:
         """Get agent instructions based on verification level"""
         base_instructions = """You are a financial analysis expert specializing in comprehensive question answering with source verification.
         
 Provide detailed, accurate financial analysis based on the retrieved documents. Always cite your sources and indicate confidence levels.
-Format your response with clear sections and include relevant financial metrics when available."""
+Format your response with clear sections and include relevant financial metrics when available.
+
+IMPORTANT FOR COMPARATIVE QUESTIONS:
+- When comparing companies (e.g., "Compare Apple and Microsoft"), ensure you provide specific data for EACH company mentioned
+- Do NOT infer data for companies if you don't have direct document citations for them
+- If you only have data for one company in a comparison, explicitly state which company lacks data
+- Use section headers to organize comparisons clearly (e.g., "## Apple Risk Factors" and "## Microsoft Risk Factors")
+- Always indicate when data is missing or inferred vs. directly cited from documents
+
+CITATION REQUIREMENTS:
+- Use specific document titles, page numbers, and section references
+- Indicate the confidence level of each piece of information
+- Flag any assumptions or inferences clearly"""
 
         if verification_level.lower() == "basic":
             return base_instructions + """
@@ -885,8 +1049,8 @@ Format your response with clear sections and include relevant financial metrics 
 VERIFICATION LEVEL: BASIC
 - Focus on providing quick, essential answers
 - Use up to 5 source documents
-- Keep responses concise (around 800 characters)
-- Provide basic source citations"""
+- Keep responses concise but complete for all entities in comparative questions
+- Provide basic source citations with document titles"""
 
         elif verification_level.lower() == "thorough":
             return base_instructions + """
@@ -896,7 +1060,8 @@ VERIFICATION LEVEL: THOROUGH
 - Use up to 10 source documents
 - Include source verification and conflict identification
 - Enable cross-referencing between sources
-- Provide medium-length responses (around 1200 characters)"""
+- For comparative questions, ensure balanced coverage of all entities
+- Provide medium-length responses with clear structure"""
 
         else:  # comprehensive
             return base_instructions + """
@@ -904,11 +1069,14 @@ VERIFICATION LEVEL: THOROUGH
 VERIFICATION LEVEL: COMPREHENSIVE
 - Provide exhaustive deep analysis
 - Use up to 15 source documents
-- Perform question decomposition if needed
-- Include multi-angle investigation
+- Perform question decomposition analysis using provided sub-questions
+- Include multi-angle investigation for each entity in comparative questions
 - Analyze limitations and provide detailed conflict analysis
-- Enable sub-question analysis
-- Provide detailed responses (around 1600 characters)"""
+- For comparisons, create detailed sections for each entity with:
+  * Direct document citations for each claim
+  * Analysis of data completeness and quality
+  * Identification of any gaps in available information
+- Provide detailed responses with comprehensive structure and analysis"""
         
     def _extract_deployment_name(self, model_config_value: str) -> str:
         """Extract deployment name from model config value, handling combined strings like 'gpt-4o (chat4o)'"""
@@ -924,9 +1092,112 @@ VERIFICATION LEVEL: COMPREHENSIVE
             except (IndexError, AttributeError):
                 logger.warning(f"Failed to parse deployment name from '{model_config_value}', using as-is")
                 return model_config_value
-        
-        # Return as-is if no parentheses (already just deployment name)
+          # Return as-is if no parentheses (already just deployment name)
         return model_config_value
+
+    async def _execute_sub_question_searches(self, sub_questions: List[str], kb_manager, top_k: int = 10) -> List[Dict[str, Any]]:
+        """Execute separate searches for each sub-question and aggregate results"""
+        all_results = []
+        seen_documents = set()  # Track document IDs to avoid duplicates
+        search_stats = []
+        
+        logger.info(f"🔍 STARTING SUB-QUESTION VECTOR SEARCHES")
+        logger.info(f"📊 Total sub-questions to search: {len(sub_questions)}")
+        logger.info(f"📄 Documents per sub-question (top_k): {top_k}")
+        logger.info(f"💡 Maximum possible documents: {len(sub_questions)} × {top_k} = {len(sub_questions) * top_k}")
+        
+        for i, sub_question in enumerate(sub_questions):
+            try:
+                logger.info(f"")
+                logger.info(f"🔎 VECTOR SEARCH {i+1}/{len(sub_questions)}")
+                logger.info(f"❓ Sub-question: '{sub_question}'")
+                
+                # Execute vector search for this sub-question
+                search_start_time = time.time()
+                sub_results = await kb_manager.search_knowledge_base(
+                    query=sub_question,
+                    top_k=top_k,
+                    filters={}
+                )
+                search_time = time.time() - search_start_time
+                
+                logger.info(f"✅ Vector search {i+1} completed in {search_time:.2f}s")
+                logger.info(f"📊 Retrieved {len(sub_results)} documents from vector store")
+                
+                # Log some details about the retrieved documents
+                if sub_results:
+                    companies = set()
+                    doc_types = set()
+                    for result in sub_results:
+                        companies.add(result.get('company', 'Unknown'))
+                        doc_types.add(result.get('document_type', 'Unknown'))
+                    
+                    logger.info(f"🏢 Companies found: {', '.join(sorted(companies))}")
+                    logger.info(f"📋 Document types: {', '.join(sorted(doc_types))}")
+                
+                # Track statistics
+                unique_docs_added = 0
+                duplicate_docs_skipped = 0
+                
+                # Add results, avoiding duplicates
+                for result in sub_results:
+                    doc_id = result.get('id') or result.get('document_id', f"doc_{len(all_results)}")
+                    if doc_id not in seen_documents:
+                        result['sub_question_source'] = sub_question
+                        result['sub_question_index'] = i + 1
+                        all_results.append(result)
+                        seen_documents.add(doc_id)
+                        unique_docs_added += 1
+                    else:
+                        duplicate_docs_skipped += 1
+                
+                search_stats.append({
+                    'sub_question': sub_question,
+                    'documents_retrieved': len(sub_results),
+                    'unique_docs_added': unique_docs_added,
+                    'duplicates_skipped': duplicate_docs_skipped,
+                    'search_time': search_time
+                })
+                
+                logger.info(f"➕ Added {unique_docs_added} unique documents")
+                logger.info(f"⏭️  Skipped {duplicate_docs_skipped} duplicate documents")
+                logger.info(f"📈 Running total unique documents: {len(all_results)}")
+                
+            except Exception as e:
+                logger.error(f"❌ Error in vector search {i+1}: {e}")
+                search_stats.append({
+                    'sub_question': sub_question,
+                    'documents_retrieved': 0,
+                    'unique_docs_added': 0,
+                    'duplicates_skipped': 0,
+                    'search_time': 0,
+                    'error': str(e)
+                })
+                continue
+        
+        # Final summary
+        total_searches = len(sub_questions)
+        successful_searches = len([s for s in search_stats if 'error' not in s])
+        total_docs_retrieved = sum(s['documents_retrieved'] for s in search_stats)
+        total_search_time = sum(s['search_time'] for s in search_stats)
+        
+        logger.info(f"")
+        logger.info(f"🎯 SUB-QUESTION SEARCH SUMMARY:")
+        logger.info(f"✅ Successful searches: {successful_searches}/{total_searches}")
+        logger.info(f"📊 Total documents retrieved: {total_docs_retrieved}")
+        logger.info(f"📄 Unique documents after deduplication: {len(all_results)}")
+        logger.info(f"⏱️  Total search time: {total_search_time:.2f}s")
+        logger.info(f"🔄 Deduplication efficiency: {len(all_results)}/{total_docs_retrieved} = {(len(all_results)/total_docs_retrieved*100):.1f}% unique" if total_docs_retrieved > 0 else "🔄 No documents to deduplicate")
+        
+        # Log per-search breakdown
+        logger.info(f"📋 DETAILED BREAKDOWN:")
+        for i, stat in enumerate(search_stats, 1):
+            if 'error' not in stat:
+                logger.info(f"   Search {i}: {stat['documents_retrieved']} docs, +{stat['unique_docs_added']} unique ({stat['search_time']:.2f}s)")
+            else:
+                logger.info(f"   Search {i}: FAILED - {stat['error']}")
+        
+        return all_results
 
 class MockAzureAIAgentService(AzureAIAgentService):
     """Mock implementation for testing and development"""

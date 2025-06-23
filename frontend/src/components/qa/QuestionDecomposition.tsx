@@ -38,7 +38,7 @@ export const QuestionDecomposition: React.FC<QuestionDecompositionProps> = ({
       <CardContent className="flex-1 overflow-hidden space-y-4">
         <div className="space-y-2">
           <h4 className="text-sm font-medium text-foreground">Original Question</h4>
-          <div className="bg-muted/30 p-3 rounded-lg text-sm text-foreground">
+          <div className="bg-muted/30 p-3 rounded-lg text-sm text-foreground text-left">
             {decomposition.originalQuestion}
           </div>
         </div>
@@ -61,7 +61,7 @@ export const QuestionDecomposition: React.FC<QuestionDecompositionProps> = ({
                   <div className="flex-shrink-0 w-6 h-6 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-xs font-medium">
                     {index + 1}
                   </div>
-                  <div className="flex-1 text-sm text-foreground">
+                  <div className="flex-1 text-sm text-foreground text-left">
                     {subQuestion}
                   </div>
                 </div>
