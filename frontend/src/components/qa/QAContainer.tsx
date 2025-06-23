@@ -134,11 +134,13 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     setQuestions(prev => [...prev, qaQuestion]);
     setIsLoading(true);
 
-    try {
-      const data = await apiService.askQuestion({
+    try {      const data = await apiService.askQuestion({
         question,
         session_id: currentSessionId,
         verification_level: verificationLevel,
+        chat_model: modelSettings.selectedModel,
+        embedding_model: modelSettings.embeddingModel,
+        temperature: modelSettings.temperature,
       });
       
       const qaAnswer: QAAnswer = {
@@ -154,15 +156,14 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
           verifiedSourcesCount: data.verification_details?.verified_sources_count || 0,
           totalSourcesCount: data.verification_details?.total_sources_count || 0,
           verificationSummary: data.verification_details?.verification_summary || 'No verification details available',
-        },
-        metadata: {
-          model: data.metadata?.model_used || modelSettings.selectedModel,
+        },        metadata: {
+          model: data.verification_details?.chat_model_used || data.metadata?.model_used || modelSettings.selectedModel,
           tokens: data.token_usage?.total_tokens,
           responseTime: data.metadata?.response_time,
           verificationLevel: verificationLevel,
           agentServiceUsed: data.metadata?.agent_service_used || agentServiceConnected,
-          agentId: data.metadata?.agent_id,
-          threadId: data.metadata?.thread_id,
+          agentId: data.verification_details?.agent_id,
+          threadId: data.verification_details?.thread_id,
         },
       };
 

@@ -91,6 +91,29 @@ npm run dev
 
 ## Configuration
 
+### Verification Level Features
+
+The QA system supports three distinct verification levels with different performance and thoroughness characteristics:
+
+| Feature | Basic | Thorough | Comprehensive |
+|---------|-------|-----------|---------------|
+| **Source Documents** | 5 | 10 | 15 |
+| **Content Length** | 800 chars | 1200 chars | 1600 chars |
+| **Response Time** | Fastest | Standard | Thorough |
+| **Question Decomposition** | ❌ | ❌ | ✅ |
+| **Source Verification** | Basic | ✅ | ✅ |
+| **Cross-referencing** | ❌ | ✅ | ✅ |
+| **Conflict Analysis** | ❌ | ✅ | ✅ |
+| **Limitation Analysis** | ❌ | ❌ | ✅ |
+| **Sub-question Analysis** | ❌ | ❌ | ✅ |
+| **Use Case** | Quick answers | Standard analysis | Complex investigation |
+
+**Basic Verification**: Speed-optimized for simple questions requiring quick answers with essential information and citations.
+
+**Thorough Verification**: Balanced approach with comprehensive analysis, source verification, and conflict identification for standard financial research.
+
+**Comprehensive Verification**: Exhaustive deep analysis with question decomposition, multi-angle investigation, and detailed limitation analysis for complex financial questions.
+
 ### Azure Services Setup
 1. **Azure AI Foundry**: Create project with Foundry Project approach
 2. **Azure OpenAI**: Deploy GPT-4, GPT-4-Turbo, and embedding models

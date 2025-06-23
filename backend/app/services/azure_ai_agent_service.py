@@ -377,16 +377,20 @@ class AzureAIAgentService:
         except Exception as e:
             logger.error(f"Error cleaning up conversations: {e}")
             return 0
-    
+
     async def process_qa_request(self, question: str, context: Dict[str, Any], verification_level: str, session_id: str, model_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Process QA request using Azure AI Agent Service with RAG"""
+        """Process QA request using Azure AI Agent Service with RAG and verification level-specific logic"""
         try:
             async with observability.trace_operation("azure_ai_agent_qa_processing") as span:
                 span.set_attribute("question_length", len(question))
                 span.set_attribute("verification_level", verification_level)
                 span.set_attribute("session_id", session_id)
                 
-                # Step 1: Retrieve relevant context from vector store using hybrid search
+                # Step 1: Configure search parameters based on verification level
+                search_config = self._get_search_config_for_verification_level(verification_level)
+                logger.info(f"Verification level {verification_level} - Using search config: {search_config}")
+                
+                # Step 2: Retrieve relevant context from vector store using hybrid search
                 logger.info(f"Retrieving context from vector store for question: {question[:100]}...")
                 
                 # Get knowledge base manager from context or create one
@@ -397,13 +401,25 @@ class AzureAIAgentService:
                     azure_manager = AzureServiceManager()
                     await azure_manager.initialize()
                     kb_manager = AdaptiveKnowledgeBaseManager(azure_manager)
-                
-                # Search for relevant documents
+                  # Search for relevant documents with verification level-specific parameters
                 search_results = await kb_manager.search_knowledge_base(
                     query=question,
-                    top_k=10,
+                    top_k=search_config["top_k"],
                     filters=context.get('filters')
                 )
+                
+                logger.info(f"Retrieved {len(search_results)} relevant documents from vector store (requested: {search_config['top_k']} for {verification_level})")
+                
+                # Step 3: Handle question decomposition for comprehensive verification
+                sub_questions = []
+                if verification_level == "comprehensive":
+                    try:
+                        decomp_result = await self.decompose_complex_question(question, context, session_id, model_config)
+                        sub_questions = decomp_result.get("sub_questions", [])
+                        logger.info(f"Decomposed question into {len(sub_questions)} sub-questions for comprehensive analysis")
+                    except Exception as e:
+                        logger.warning(f"Question decomposition failed: {e}")
+                        sub_questions = []
                 
                 logger.info(f"Retrieved {len(search_results)} relevant documents from vector store")
                 
@@ -438,8 +454,7 @@ class AzureAIAgentService:
                         "document_type": result.get('document_type', ''),
                         "company": result.get('company', ''),
                         "page_number": result.get('page_number'),
-                        "section_title": result.get('section_title', ''),
-                        "confidence": confidence_level,
+                        "section_title": result.get('section_title', ''),                        "confidence": confidence_level,
                         "url": result.get('source_url', ''),
                         "credibility_score": credibility_score,
                         "relevance_explanation": result.get('relevance_explanation', '')
@@ -447,31 +462,19 @@ class AzureAIAgentService:
                 
                 span.set_attribute("retrieved_documents", len(search_results))
                 
-                # Step 3: Create QA agent with enhanced instructions including RAG context
-                chat_deployment = model_config.get('chat_model') or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                # Step 4: Create verification level-specific QA agent with deployment name from frontend
+                # Extract string value from verification_level (in case it's an enum)
+                verification_level_str = verification_level.value if hasattr(verification_level, 'value') else str(verification_level).lower()
+                
+                # Extract deployment name from model config (handle cases like "gpt-4o (chat4o)")
+                chat_deployment = self._extract_deployment_name(model_config.get('chat_model'))
+                
+                agent_name = f"Financial_QA_Agent_{verification_level_str.title()}"
+                logger.info(f"Creating {verification_level_str} QA agent '{agent_name}' with deployment name: {chat_deployment}")
+                
                 qa_agent = await self.find_or_create_agent(
-                    agent_name="Financial_QA_Agent",
-                    instructions=f"""
-                    You are a financial QA expert specializing in comprehensive question answering with source verification.
-                    
-                    Verification Level: {verification_level}
-                    
-                    IMPORTANT: You have been provided with relevant financial documents retrieved from a vector database. 
-                    Your primary task is to:
-                    1. Analyze the question thoroughly in the context of the retrieved documents
-                    2. Use ONLY the information from the provided retrieved documents to answer the question
-                    3. Provide a comprehensive, accurate answer based on the retrieved sources
-                    4. Include specific citations to the document sections you reference
-                    5. Assess confidence level based on the quality and relevance of the retrieved sources
-                    6. If the retrieved documents don't contain sufficient information, clearly state this
-                    
-                    CITATION FORMAT: When referencing information, use this format:
-                    [Document X: Title - Company] for general references
-                    [Document X, Page Y] for specific page references
-                    
-                    Always maintain high standards for financial accuracy and cite your sources appropriately.
-                    Never make up information that is not in the retrieved documents.
-                    """,
+                    agent_name=agent_name,
+                    instructions=self._get_agent_instructions_for_verification_level(verification_level_str),
                     model_deployment=chat_deployment
                 )
                 
@@ -505,14 +508,13 @@ class AzureAIAgentService:
                     agent_id=qa_agent.id,
                     thread_id=thread_id,
                     message=enhanced_message,
-                    context=enhanced_context
-                )
+                    context=enhanced_context                )
                 
                 return {
                     "answer": result.response,
                     "confidence_score": 0.8,  # Could be enhanced with source quality analysis
                     "sources": sources,
-                    "sub_questions": [],  # Could be enhanced with decomposition
+                    "sub_questions": sub_questions,
                     "verification_details": {
                         "verification_level": verification_level,
                         "agent_id": qa_agent.id,
@@ -521,8 +523,9 @@ class AzureAIAgentService:
                         "vector_search_used": True,
                         "sources_verified": len([s for s in sources if s.get('credibility_score', 0) >= 0.6]),
                         "total_sources": len(sources),
-                        "verification_summary": f"Retrieved {len(search_results)} documents from vector store. {len([s for s in sources if s.get('credibility_score', 0) >= 0.6])} sources meet high credibility threshold.",
-                        "verification_status": "completed" if sources else "no_sources"
+                        "verification_summary": f"Retrieved {len(search_results)} documents from vector store using {verification_level} verification (top_k={search_config['top_k']}). {len([s for s in sources if s.get('credibility_score', 0) >= 0.6])} sources meet high credibility threshold.",
+                        "verification_status": "completed" if sources else "no_sources",
+                        "chat_model_used": chat_deployment
                     }
                 }
                 
@@ -536,9 +539,11 @@ class AzureAIAgentService:
         try:
             async with observability.trace_operation("azure_ai_agent_question_decomposition") as span:
                 span.set_attribute("question_length", len(question))
-                span.set_attribute("session_id", session_id)
+                span.set_attribute("session_id", session_id)                # Extract deployment name from model config (handle cases like "gpt-4o (chat4o)")
+                chat_deployment = self._extract_deployment_name(model_config.get('chat_model'))
                 
-                chat_deployment = model_config.get('chat_model') or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+                logger.info(f"Creating Question Decomposition agent with deployment name: {chat_deployment}")
+                
                 decomposition_agent = await self.find_or_create_agent(
                     agent_name="Question_Decomposition_Agent",
                     instructions="""
@@ -834,7 +839,94 @@ class AzureAIAgentService:
             observability.record_error("find_or_create_agent_error", str(e))
             raise
 
-    # ...existing code...
+    def _get_search_config_for_verification_level(self, verification_level: str) -> Dict[str, Any]:
+        """Get search configuration based on verification level per README requirements"""
+        verification_configs = {
+            "basic": {
+                "top_k": 5,
+                "content_length": 800,
+                "enable_decomposition": False,
+                "enable_cross_referencing": False,
+                "enable_conflict_analysis": False,
+                "enable_limitation_analysis": False
+            },
+            "thorough": {
+                "top_k": 10,
+                "content_length": 1200,
+                "enable_decomposition": False,
+                "enable_cross_referencing": True,
+                "enable_conflict_analysis": True,
+                "enable_limitation_analysis": False
+            },
+            "comprehensive": {
+                "top_k": 15,
+                "content_length": 1600,
+                "enable_decomposition": True,
+                "enable_cross_referencing": True,
+                "enable_conflict_analysis": True,
+                "enable_limitation_analysis": True
+            }
+        }
+        
+        config = verification_configs.get(verification_level.lower(), verification_configs["thorough"])
+        logger.info(f"Verification level '{verification_level}' mapped to config: {config}")
+        return config
+
+    def _get_agent_instructions_for_verification_level(self, verification_level: str) -> str:
+        """Get agent instructions based on verification level"""
+        base_instructions = """You are a financial analysis expert specializing in comprehensive question answering with source verification.
+        
+Provide detailed, accurate financial analysis based on the retrieved documents. Always cite your sources and indicate confidence levels.
+Format your response with clear sections and include relevant financial metrics when available."""
+
+        if verification_level.lower() == "basic":
+            return base_instructions + """
+
+VERIFICATION LEVEL: BASIC
+- Focus on providing quick, essential answers
+- Use up to 5 source documents
+- Keep responses concise (around 800 characters)
+- Provide basic source citations"""
+
+        elif verification_level.lower() == "thorough":
+            return base_instructions + """
+
+VERIFICATION LEVEL: THOROUGH
+- Provide standard comprehensive analysis
+- Use up to 10 source documents
+- Include source verification and conflict identification
+- Enable cross-referencing between sources
+- Provide medium-length responses (around 1200 characters)"""
+
+        else:  # comprehensive
+            return base_instructions + """
+
+VERIFICATION LEVEL: COMPREHENSIVE
+- Provide exhaustive deep analysis
+- Use up to 15 source documents
+- Perform question decomposition if needed
+- Include multi-angle investigation
+- Analyze limitations and provide detailed conflict analysis
+- Enable sub-question analysis
+- Provide detailed responses (around 1600 characters)"""
+        
+    def _extract_deployment_name(self, model_config_value: str) -> str:
+        """Extract deployment name from model config value, handling combined strings like 'gpt-4o (chat4o)'"""
+        if not model_config_value:
+            return settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+        
+        # Handle combined strings like "gpt-4o (chat4o)" -> extract "chat4o"
+        if '(' in model_config_value and ')' in model_config_value:
+            try:
+                deployment_name = model_config_value.split('(')[1].split(')')[0].strip()
+                logger.debug(f"Extracted deployment name '{deployment_name}' from combined string '{model_config_value}'")
+                return deployment_name
+            except (IndexError, AttributeError):
+                logger.warning(f"Failed to parse deployment name from '{model_config_value}', using as-is")
+                return model_config_value
+        
+        # Return as-is if no parentheses (already just deployment name)
+        return model_config_value
 
 class MockAzureAIAgentService(AzureAIAgentService):
     """Mock implementation for testing and development"""

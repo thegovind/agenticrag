@@ -217,11 +217,13 @@ class ApiService {
     
     return this.makeRequest(endpoint);
   }
-
   async askQuestion(request: {
     question: string;
     session_id: string;
     verification_level: 'basic' | 'thorough' | 'comprehensive';
+    chat_model?: string;
+    embedding_model?: string;
+    temperature?: number;
   }): Promise<{
     answer: string;
     session_id: string;

@@ -56,7 +56,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., description="User message")
     session_id: Optional[str] = None
-    chat_model: str = Field(default="gpt-4", description="Chat model deployment name")
+    chat_model: str = Field(default="chat4omini", description="Chat model deployment name")
     embedding_model: str = Field(default="text-embedding-ada-002", description="Embedding model deployment name")
     temperature: float = Field(default=0.1, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4000, ge=1, le=8000)
@@ -142,7 +142,7 @@ class VerificationLevel(str, Enum):
 class QARequest(BaseModel):
     question: str = Field(..., description="The financial question to answer")
     session_id: Optional[str] = None
-    chat_model: str = Field(default="gpt-4", description="Chat model deployment name")
+    chat_model: str = Field(default="chat4omini", description="Chat model deployment name")
     embedding_model: str = Field(default="text-embedding-3-small", description="Embedding model deployment name")
     temperature: float = Field(default=0.1, ge=0.0, le=2.0)
     verification_level: VerificationLevel = VerificationLevel.THOROUGH
@@ -161,7 +161,7 @@ class QAResponse(BaseModel):
 
 class QuestionDecompositionRequest(BaseModel):
     question: str = Field(..., description="The complex question to decompose")
-    chat_model: str = Field(default="gpt-4", description="Chat model deployment name")
+    chat_model: str = Field(default="chat4omini", description="Chat model deployment name")
     context: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 class QuestionDecompositionResponse(BaseModel):

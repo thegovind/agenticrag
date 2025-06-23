@@ -75,9 +75,22 @@ async def ask_question(
                     "chat_model": request.chat_model,
                     "embedding_model": request.embedding_model,
                     "temperature": request.temperature
-                }
-            )
+                }            )
             logger.info(f"QA result received: {len(qa_result.get('answer', ''))} characters")
+            
+            # Extract deployment names from request (handle combined strings like "gpt-4o (chat4o)")
+            def extract_deployment_name(model_value: str) -> str:
+                if not model_value:
+                    return "unknown"
+                if '(' in model_value and ')' in model_value:
+                    try:
+                        return model_value.split('(')[1].split(')')[0].strip()
+                    except (IndexError, AttributeError):
+                        return model_value
+                return model_value
+            
+            chat_deployment_used = extract_deployment_name(request.chat_model)
+            embedding_deployment_used = extract_deployment_name(request.embedding_model)
             
             answer = qa_result.get("answer", "I apologize, but I couldn't generate a comprehensive answer to your question at this time.")
             confidence_score = qa_result.get("confidence_score", 0.5)
@@ -106,11 +119,10 @@ async def ask_question(
             token_usage = {
                 "prompt_tokens": int(prompt_tokens),
                 "completion_tokens": int(completion_tokens),
-                "total_tokens": total_tokens
-            }
+                "total_tokens": total_tokens            }
             
             observability.track_tokens(
-                model=request.chat_model,
+                model=chat_deployment_used,
                 prompt_tokens=token_usage["prompt_tokens"],
                 completion_tokens=token_usage["completion_tokens"],
                 session_id=session_id
@@ -119,8 +131,7 @@ async def ask_question(
             response_time = time.time() - start_time
             
             sources = []
-            for citation in citations:
-                sources.append({
+            for citation in citations:                sources.append({
                     "content": citation.content,
                     "source": citation.source,
                     "title": citation.document_title,
@@ -128,7 +139,7 @@ async def ask_question(
                     "section_title": citation.section_title,
                     "credibility_score": getattr(citation, 'credibility_score', 0.5)
                 })
-            
+
             evaluation_results = []
             # Temporarily disable evaluation due to package conflicts
             try:
@@ -162,7 +173,6 @@ async def ask_question(
                 
                 span.set_attribute("evaluation.count", len(evaluation_results))
                 span.set_attribute("evaluation.avg_score", 0)
-                
             except Exception as e:
                 logger.warning(f"Evaluation failed for QA session {session_id}: {e}")
             
@@ -175,8 +185,8 @@ async def ask_question(
                 verification_details=verification_details,
                 metadata={
                     "exercise_type": "qa",
-                    "model_used": request.chat_model,
-                    "embedding_model": request.embedding_model,
+                    "model_used": chat_deployment_used,
+                    "embedding_model": embedding_deployment_used,
                     "temperature": request.temperature,
                     "verification_level": request.verification_level,
                     "evaluation_count": len(evaluation_results),
@@ -219,7 +229,7 @@ async def decompose_question(
         async with observability.trace_operation(
             "question_decomposition",
             session_id=session_id,
-            model=request.chat_model.value
+            model=request.chat_model
         ) as span:
             
             observability.track_request("qa_decompose", session_id=session_id)
@@ -234,14 +244,13 @@ async def decompose_question(
             from app.services.multi_agent_orchestrator import MultiAgentOrchestrator
             orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)
             azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
-            
-            # Use Azure AI Agent Service for question decomposition
+              # Use Azure AI Agent Service for question decomposition
             decomposition_result = await azure_ai_agent_service.decompose_complex_question(
                 question=request.question,
                 context=request.context or {},
                 session_id=session_id,
                 model_config={
-                    "chat_model": request.chat_model.value
+                    "chat_model": request.chat_model
                 }
             )
             
@@ -250,13 +259,26 @@ async def decompose_question(
             
             response_time = time.time() - start_time
             
+            # Extract deployment name for metadata consistency
+            def extract_deployment_name(model_value: str) -> str:
+                if not model_value:
+                    return "unknown"
+                if '(' in model_value and ')' in model_value:
+                    try:
+                        return model_value.split('(')[1].split(')')[0].strip()
+                    except (IndexError, AttributeError):
+                        return model_value
+                return model_value
+            
+            chat_deployment_used = extract_deployment_name(request.chat_model)
+            
             response = QuestionDecompositionResponse(
                 original_question=request.question,
                 sub_questions=sub_questions,
                 reasoning=reasoning,
                 session_id=session_id,
                 metadata={
-                    "model_used": request.chat_model.value,
+                    "model_used": chat_deployment_used,
                     "response_time": response_time
                 }
             )
