@@ -56,8 +56,7 @@ async def ask_question(
             
             logger.info("Creating multi-agent orchestrator...")
             from app.services.multi_agent_orchestrator import MultiAgentOrchestrator
-            orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)
-            
+            orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)            
             logger.info("Getting Azure AI Agent Service...")
             azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
             logger.info(f"Azure AI Agent Service type: {type(azure_ai_agent_service).__name__}")
@@ -67,7 +66,8 @@ async def ask_question(
                 question=request.question,
                 context={
                     **(request.context or {}),
-                    'kb_manager': kb_manager
+                    'kb_manager': kb_manager,
+                    'credibility_check_enabled': request.credibility_check_enabled
                 },
                 verification_level=request.verification_level,
                 session_id=session_id,
@@ -75,7 +75,8 @@ async def ask_question(
                     "chat_model": request.chat_model,
                     "embedding_model": request.embedding_model,
                     "temperature": request.temperature
-                }            )
+                }
+            )
             logger.info(f"QA result received: {len(qa_result.get('answer', ''))} characters")
             
             # Extract deployment names from request (handle combined strings like "gpt-4o (chat4o)")

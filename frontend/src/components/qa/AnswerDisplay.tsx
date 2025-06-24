@@ -13,12 +13,14 @@ interface AnswerDisplayProps {
   answer: QAAnswer;
   onVerifySources: () => void;
   isVerifyingSources?: boolean;
+  credibilityCheckEnabled?: boolean;
 }
 
 export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({ 
   answer, 
   onVerifySources, 
-  isVerifyingSources = false 
+  isVerifyingSources = false,
+  credibilityCheckEnabled = false
 }) => {
   const [selectedCitation, setSelectedCitation] = useState<QACitation | null>(null);
   const [showCitationModal, setShowCitationModal] = useState(false);
@@ -164,26 +166,28 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
             <h4 className="text-sm font-medium text-foreground">
               Source Verification ({answer.citations.length} sources)
             </h4>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onVerifySources}
-              disabled={isVerifyingSources}
-              className="text-xs"
-            >
-              {isVerifyingSources ? (
-                <div className="flex items-center space-x-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"></div>
-                  <span>Verifying Sources...</span>
-                </div>
-              ) : (
-                'Verify Sources'
-              )}
-            </Button>
+            {credibilityCheckEnabled && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onVerifySources}
+                disabled={isVerifyingSources}
+                className="text-xs"
+              >
+                {isVerifyingSources ? (
+                  <div className="flex items-center space-x-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"></div>
+                    <span>Verifying Sources...</span>
+                  </div>
+                ) : (
+                  'Verify Sources'
+                )}
+              </Button>
+            )}
           </div>
 
           {/* Enhanced progress indicator when verifying */}
-          {isVerifyingSources && (
+          {isVerifyingSources && credibilityCheckEnabled && (
             <div className="bg-muted/50 p-3 rounded-lg border-l-4 border-primary">
               <div className="flex items-center space-x-3">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent"></div>
@@ -200,25 +204,30 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-            <div className="bg-muted/30 p-2 rounded">
-              <span className="font-medium">Overall Credibility:</span>
-              <span className={`ml-1 font-medium ${getCredibilityColor(answer.verificationDetails.overallCredibilityScore)}`}>
-                {formatCredibilityScore(answer.verificationDetails.overallCredibilityScore)}%
-              </span>
-            </div>
-            <div className="bg-muted/30 p-2 rounded">
-              <span className="font-medium">Verified Sources:</span>
-              <span className="ml-1">
-                {answer.verificationDetails.verifiedSourcesCount}/{answer.verificationDetails.totalSourcesCount}
-              </span>
-            </div>
-          </div>
+          {/* Only show verification details if credibility check is enabled */}
+          {credibilityCheckEnabled && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                <div className="bg-muted/30 p-2 rounded">
+                  <span className="font-medium">Overall Credibility:</span>
+                  <span className={`ml-1 font-medium ${getCredibilityColor(answer.verificationDetails.overallCredibilityScore)}`}>
+                    {formatCredibilityScore(answer.verificationDetails.overallCredibilityScore)}%
+                  </span>
+                </div>
+                <div className="bg-muted/30 p-2 rounded">
+                  <span className="font-medium">Verified Sources:</span>
+                  <span className="ml-1">
+                    {answer.verificationDetails.verifiedSourcesCount}/{answer.verificationDetails.totalSourcesCount}
+                  </span>
+                </div>
+              </div>
 
-          {answer.verificationDetails.verificationSummary && (
-            <div className="text-xs text-muted-foreground bg-muted/20 p-2 rounded">
-              <strong>Verification Summary:</strong> {answer.verificationDetails.verificationSummary}
-            </div>
+              {answer.verificationDetails.verificationSummary && (
+                <div className="text-xs text-muted-foreground bg-muted/20 p-2 rounded">
+                  <strong>Verification Summary:</strong> {answer.verificationDetails.verificationSummary}
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -238,7 +247,7 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
                           <Badge variant="outline" className="text-xs">
                             {citation.confidence}
                           </Badge>
-                          {citation.credibilityScore !== undefined && (
+                          {credibilityCheckEnabled && citation.credibilityScore !== undefined && (
                             <span className={`text-xs font-medium ${getCredibilityColor(citation.credibilityScore)}`}>
                               {formatCredibilityScore(citation.credibilityScore)}%
                             </span>
@@ -300,7 +309,7 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
                   <Badge variant="outline" className="text-xs">
                     {selectedCitation.confidence}
                   </Badge>
-                  {selectedCitation.credibilityScore !== undefined && (
+                  {credibilityCheckEnabled && selectedCitation.credibilityScore !== undefined && (
                     <span className={`text-sm font-medium ${getCredibilityColor(selectedCitation.credibilityScore)}`}>
                       {formatCredibilityScore(selectedCitation.credibilityScore)}% credible
                     </span>

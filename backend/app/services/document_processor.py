@@ -1176,7 +1176,7 @@ class DocumentProcessor:
             """
             
             logger.info(f"Calling Azure OpenAI for metadata extraction...")
-            response = self.azure_manager.openai_client.chat.completions.create(
+            response = await self.azure_manager.openai_client.chat.completions.create(
                 model=deployment_name,  # Use the provided deployment name
                 messages=[
                     {"role": "system", "content": "You are an expert financial document analyzer. Extract metadata accurately and return only valid JSON."},

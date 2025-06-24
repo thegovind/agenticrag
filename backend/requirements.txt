@@ -42,3 +42,8 @@ aiofiles==23.2.1
 msal==1.25.0
 edgartools==2.27.0
 markdownify==0.12.1
+
+# Azure AI Foundry tracing and Application Insights
+azure-ai-projects
+azure-monitor-opentelemetry==1.6.7
+opentelemetry-instrumentation-openai-v2

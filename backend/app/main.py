@@ -28,6 +28,7 @@ from app.core.config import settings
 from app.api.routes import knowledge_base, chat, admin, documents, qa, sec_documents, deployments
 from app.services.azure_services import AzureServiceManager
 from app.core.observability import observability, setup_fastapi_instrumentation
+from app.core.tracing import setup_ai_foundry_tracing
 # Temporarily disable evaluation due to package conflicts
 # from app.core.evaluation import setup_evaluation_framework
 
@@ -38,6 +39,14 @@ async def lifespan(app: FastAPI):
     """Application lifespan management with observability and evaluation setup"""
     logger = logging.getLogger(__name__)
     logger.info("Starting RAG Financial Assistant API")
+    
+    # Initialize Azure AI Foundry tracing
+    logger.info("🔍 Setting up Azure AI Foundry tracing...")
+    tracing_success = setup_ai_foundry_tracing()
+    if tracing_success:
+        logger.info("✅ Azure AI Foundry tracing enabled - traces will be visible in AI Foundry portal")
+    else:
+        logger.warning("⚠️ Azure AI Foundry tracing setup failed - continuing without tracing")
     
     azure_manager = None
     try:
@@ -74,6 +83,7 @@ application = FastAPI(
 )
 
 setup_fastapi_instrumentation(application)
+setup_ai_foundry_tracing(application)
 
 application.add_middleware(
     CORSMiddleware,

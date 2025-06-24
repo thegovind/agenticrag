@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { QuestionInput } from './QuestionInput';
 import { AnswerDisplay } from './AnswerDisplay';
 import { SourceVerification } from './SourceVerificationModal';
@@ -86,6 +88,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
   } | null>(null);
   const [showAgentStatus, setShowAgentStatus] = useState(false);
   const [agentServiceConnected, setAgentServiceConnected] = useState(false);
+  const [credibilityCheckEnabled, setCredibilityCheckEnabled] = useState(false); // Off by default
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -132,15 +135,14 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     };
 
     setQuestions(prev => [...prev, qaQuestion]);
-    setIsLoading(true);
-
-    try {      const data = await apiService.askQuestion({
+    setIsLoading(true);    try {      const data = await apiService.askQuestion({
         question,
         session_id: currentSessionId,
         verification_level: verificationLevel,
         chat_model: modelSettings.selectedModel,
         embedding_model: modelSettings.embeddingModel,
         temperature: modelSettings.temperature,
+        credibility_check_enabled: credibilityCheckEnabled, // Pass the toggle state
       });
       
       const qaAnswer: QAAnswer = {
@@ -295,12 +297,12 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                           </button>
                         </div>
                       </div>
-                      
-                      {answer && (
+                        {answer && (
                         <AnswerDisplay
                           answer={answer}
                           onVerifySources={() => handleVerifySources(answer)}
                           isVerifyingSources={isVerifyingSourcesForAnswer === answer.id}
+                          credibilityCheckEnabled={credibilityCheckEnabled}
                         />
                       )}
                     </div>
@@ -325,8 +327,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                 )}
               </div>
             </ScrollArea>
-            
-            <div className="border-t p-4">
+              <div className="border-t p-4">
               <div className="flex items-center gap-2 mb-2">
                 <button
                   onClick={handleNewSession}
@@ -344,6 +345,20 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                 >
                   Agent Status
                 </button>
+                
+                {/* Credibility Check Toggle */}
+                <div className="flex items-center space-x-2 ml-4">
+                  <Switch
+                    id="credibility-check"
+                    checked={credibilityCheckEnabled}
+                    onCheckedChange={setCredibilityCheckEnabled}
+                  />
+                  <Label htmlFor="credibility-check" className="text-xs text-muted-foreground">
+                    Credibility Check
+                  </Label>
+                </div>
+                
+                <span className="text-xs text-muted-foreground">{/* separator */}</span>
                 <span className="text-xs text-muted-foreground">
                   Session: {currentSessionId.split('_')[2]}
                 </span>

@@ -148,6 +148,7 @@ class QARequest(BaseModel):
     verification_level: VerificationLevel = VerificationLevel.THOROUGH
     context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional context for the question")
     max_tokens: int = Field(default=4000, ge=1, le=8000)
+    credibility_check_enabled: bool = Field(default=False, description="Whether to perform credibility checks on sources")
 
 class QAResponse(BaseModel):
     answer: str = Field(..., description="The comprehensive answer to the question")

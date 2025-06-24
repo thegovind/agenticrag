@@ -216,14 +216,14 @@ class ApiService {
       : `/documents/${documentId}/chunks`;
     
     return this.makeRequest(endpoint);
-  }
-  async askQuestion(request: {
+  }  async askQuestion(request: {
     question: string;
     session_id: string;
     verification_level: 'basic' | 'thorough' | 'comprehensive';
     chat_model?: string;
     embedding_model?: string;
     temperature?: number;
+    credibility_check_enabled?: boolean;
   }): Promise<{
     answer: string;
     session_id: string;

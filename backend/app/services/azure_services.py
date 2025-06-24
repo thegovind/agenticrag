@@ -1,10 +1,11 @@
 from azure.search.documents import SearchClient
+from azure.search.documents.aio import SearchClient as AsyncSearchClient
 from azure.search.documents.indexes import SearchIndexClient
 from azure.search.documents.models import VectorizedQuery
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.cosmos import CosmosClient
 from azure.identity import DefaultAzureCredential, ClientSecretCredential
-from openai import AzureOpenAI
+from openai import AzureOpenAI, AsyncAzureOpenAI
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import ConnectionType
 import asyncio
@@ -231,8 +232,8 @@ class AzureServiceManager:
             else:
                 search_credential = self.credential
                 logger.info("Using Service Principal authentication for Azure Search")
-                
-            self.search_client = SearchClient(
+            
+            self.search_client = AsyncSearchClient(
                 endpoint=search_endpoint,
                 index_name=settings.AZURE_SEARCH_INDEX_NAME,
                 credential=search_credential
@@ -276,10 +277,11 @@ class AzureServiceManager:
                 self.project_client = None
                 self.ai_foundry_client = None
             
-            self.openai_client = AzureOpenAI(
+            self.openai_client = AsyncAzureOpenAI(
                 azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
                 api_key=settings.AZURE_OPENAI_API_KEY,
-                api_version=settings.AZURE_OPENAI_API_VERSION            )
+                api_version=settings.AZURE_OPENAI_API_VERSION
+            )
             
             # Ensure search index exists
             await self.ensure_search_index_exists()
@@ -490,14 +492,27 @@ class AzureServiceManager:
             return False
 
     async def get_embedding(self, text: str, model: str = None) -> List[float]:
-        """Get embedding for text using Azure OpenAI"""
+        """Get embedding for text using Azure OpenAI async client"""
         try:
             # Use deployment name from settings, not model name
             deployment_name = model or settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME
-            response = self.openai_client.embeddings.create(
+            
+            # Add timing and thread logging for debugging
+            import threading
+            import time
+            thread_id = threading.get_ident()
+            start_time = time.time()
+            logger.debug(f"🔤 [Thread-{thread_id}] Starting embedding request for {len(text)} chars using {deployment_name}")
+            
+            # Use async client directly - no need for run_in_executor
+            response = await self.openai_client.embeddings.create(
                 input=text,
                 model=deployment_name
             )
+            
+            elapsed_time = time.time() - start_time
+            logger.debug(f"✅ [Thread-{thread_id}] Embedding completed in {elapsed_time:.2f}s")
+            
             return response.data[0].embedding
         except Exception as e:
             logger.error(f"Failed to get embedding: {e}")
@@ -506,6 +521,13 @@ class AzureServiceManager:
     async def hybrid_search(self, query: str, top_k: int = 10, filters: str = None, min_score: float = 0.0) -> List[Dict]:
         """Perform hybrid search (vector + keyword) on the knowledge base"""
         try:
+            # Add timing and thread logging for debugging
+            import threading
+            import time
+            thread_id = threading.get_ident()
+            start_time = time.time()
+            logger.debug(f"🔍 [Thread-{thread_id}] Starting hybrid search for query: '{query[:50]}...' (top_k={top_k})")
+            
             query_vector = await self.get_embedding(query)
             vector_query = VectorizedQuery(
                 vector=query_vector,
@@ -513,9 +535,12 @@ class AzureServiceManager:
                 fields="content_vector"
             )
             
-            results = self.search_client.search(
+            # Use async search client directly - no need for run_in_executor
+            search_start = time.time()
+            results = await self.search_client.search(
                 search_text=query,
-                vector_queries=[vector_query],                select=["id", "content", "title", "document_id", "source", "chunk_id", 
+                vector_queries=[vector_query],
+                select=["id", "content", "title", "document_id", "source", "chunk_id", 
                        "document_type", "company", "filing_date", "section_type", 
                        "page_number", "credibility_score", "processed_at", "citation_info",
                        "ticker", "cik", "form_type", "accession_number", "industry", 
@@ -526,15 +551,18 @@ class AzureServiceManager:
                 query_type="semantic",
                 semantic_configuration_name="default-semantic-config"
             )
-            
-            # Filter results byS minimum score if specix`fied
+            search_time = time.time() - search_start
+              # Filter results by minimum score if specified - use async iteration
             filtered_results = []
-            for result in results:
+            async for result in results:
                 result_dict = dict(result)
                 score = getattr(result, '@search.score', 0.0)
                 if score >= min_score:
                     result_dict['search_score'] = score
                     filtered_results.append(result_dict)
+            
+            elapsed_time = time.time() - start_time
+            logger.debug(f"✅ [Thread-{thread_id}] Hybrid search completed in {elapsed_time:.2f}s (embedding: {search_start - start_time:.2f}s, search: {search_time:.2f}s, found: {len(filtered_results)} results)")
             
             return filtered_results            
         except Exception as e:

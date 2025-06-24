@@ -172,7 +172,7 @@ class CredibilityAssessor:
             Respond with only a number from 1-10.
             """
             
-            response = self.azure_manager.openai_client.chat.completions.create(
+            response = await self.azure_manager.openai_client.chat.completions.create(
                 model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
@@ -283,7 +283,7 @@ class CredibilityAssessor:
             Respond with only a decimal number from 0.0 to 1.0.
             """
             
-            response = self.azure_manager.openai_client.chat.completions.create(
+            response = await self.azure_manager.openai_client.chat.completions.create(
                 model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,

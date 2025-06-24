@@ -376,7 +376,7 @@ class AdaptiveKnowledgeBaseManager:
             }}
             """
             
-            response = self.azure_manager.openai_client.chat.completions.create(
+            response = await self.azure_manager.openai_client.chat.completions.create(
                 model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
@@ -662,12 +662,18 @@ class AdaptiveKnowledgeBaseManager:
             return 0.0
 
     async def search_knowledge_base(self, query: str, filters: Dict = None, 
-                                  top_k: int = 10) -> List[Dict]:
+                                  top_k: int = 10, chat_model: str = None) -> List[Dict]:
         """
         Search the adaptive knowledge base
         
         This method provides the interface for other exercises to query
         the dynamically updated knowledge base
+        
+        Args:
+            query: The search query
+            filters: Optional filters to apply
+            top_k: Number of results to return
+            chat_model: The chat model deployment name to use for relevance explanations
         """
         try:
             filter_str = None
@@ -694,7 +700,7 @@ class AdaptiveKnowledgeBaseManager:
             for result in results:
                 enhanced_result = {
                     **result,
-                    "relevance_explanation": await self._explain_relevance(query, result),
+                    "relevance_explanation": await self._explain_relevance(query, result, chat_model),
                     "last_updated": result.get("last_updated", "unknown"),
                     "confidence_score": result.get("credibility_score", 0.0)
                 }
@@ -706,7 +712,7 @@ class AdaptiveKnowledgeBaseManager:
             logger.error(f"Error searching knowledge base: {e}")
             return []
 
-    async def _explain_relevance(self, query: str, result: Dict) -> str:
+    async def _explain_relevance(self, query: str, result: Dict, chat_model: str = None) -> str:
         """Generate explanation for why a result is relevant to the query"""
         try:
             prompt = f"""
@@ -720,8 +726,11 @@ class AdaptiveKnowledgeBaseManager:
             Provide a brief, professional explanation (1-2 sentences) of the relevance.
             """
             
-            response = self.azure_manager.openai_client.chat.completions.create(
-                model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
+            # Use the passed model if available, otherwise fall back to default
+            model_to_use = chat_model or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+            
+            response = await self.azure_manager.openai_client.chat.completions.create(
+                model=model_to_use,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=100
@@ -730,7 +739,7 @@ class AdaptiveKnowledgeBaseManager:
             return response.choices[0].message.content.strip()
             
         except Exception as e:
-            logger.error(f"Error generating relevance explanation: {e}")
+            logger.error(f"Error generating relevance explanation with model {chat_model or 'default'}: {e}")
             return f"Relevant to '{query}' based on content similarity and credibility score of {result.get('credibility_score', 0.0)}"
     
     async def enhance_financial_chunking(self, document_content: str, metadata: Dict) -> List[Dict]:
