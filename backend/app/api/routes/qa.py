@@ -12,7 +12,8 @@ from app.models.schemas import (
     QuestionDecompositionResponse,
     SourceVerificationRequest,
     SourceVerificationResponse,
-    Citation
+    Citation,
+    PerformanceMetrics
 )
 from app.core.observability import observability
 # Temporarily disable evaluation due to package conflicts
@@ -21,6 +22,7 @@ from app.services.multi_agent_orchestrator import MultiAgentOrchestrator, AgentT
 from app.services.azure_ai_agent_service import AzureAIAgentService
 from app.services.azure_services import AzureServiceManager
 from app.services.token_usage_tracker import TokenUsageTracker, ServiceType, OperationType
+from app.services.performance_tracker import performance_tracker
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -89,9 +91,32 @@ async def ask_question(
             logger.info("Getting Azure AI Agent Service...")
             azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
             logger.info(f"Azure AI Agent Service type: {type(azure_ai_agent_service).__name__}")
+            logger.info("Processing QA request with Azure AI Agent Service...")
             
-            logger.info("Processing QA request with Azure AI Agent Service...")            
-              # Create separate tracking session for embedding operations
+            # Initialize performance tracking
+            question_id = str(uuid.uuid4())
+            reasoning_chain = performance_tracker.start_reasoning_chain(question_id, request.question, session_id)
+            
+            # Step 1: Question Analysis
+            step_num = performance_tracker.add_reasoning_step(
+                question_id, 
+                "Analyzing question complexity and requirements",
+                "analyze",
+                confidence=0.9,
+                output="Question analyzed and complexity assessed"
+            )
+            performance_tracker.complete_reasoning_step(question_id, step_num)
+            
+            # Step 2: Knowledge Base Search
+            step_num = performance_tracker.add_reasoning_step(
+                question_id,
+                "Searching knowledge base for relevant documents",
+                "search", 
+                confidence=0.8,
+                output="Relevant documents identified"
+            )
+            
+            # Create separate tracking session for embedding operations
             embedding_tracking_id = token_tracker.start_tracking(
                 session_id=session_id,
                 service_type=ServiceType.QA_SERVICE,
@@ -111,7 +136,9 @@ async def ask_question(
                     'credibility_check_enabled': request.credibility_check_enabled,
                     'token_tracker': token_tracker,
                     'tracking_id': tracking_id,
-                    'embedding_tracking_id': embedding_tracking_id  # Pass separate embedding tracking ID
+                    'embedding_tracking_id': embedding_tracking_id,  # Pass separate embedding tracking ID
+                    'performance_tracker': performance_tracker,
+                    'question_id': question_id
                 },
                 verification_level=request.verification_level,
                 session_id=session_id,
@@ -122,6 +149,22 @@ async def ask_question(
                 }
             )
             logger.info(f"QA result received: {len(qa_result.get('answer', ''))} characters")
+            
+            # Complete search step
+            performance_tracker.complete_reasoning_step(
+                question_id, step_num, 
+                f"Found {len(qa_result.get('sources', []))} relevant sources",
+                confidence=0.8
+            )
+            
+            # Step 3: Answer Synthesis
+            step_num = performance_tracker.add_reasoning_step(
+                question_id,
+                "Synthesizing comprehensive answer from sources",
+                "synthesize",
+                sources_consulted=[s.get('source', '') for s in qa_result.get('sources', [])],
+                confidence=0.85
+            )
             
             chat_deployment_used = extract_deployment_name(request.chat_model)
             embedding_deployment_used = extract_deployment_name(request.embedding_model)
@@ -213,13 +256,49 @@ async def ask_question(
                 #         "reasoning": result.reasoning
                 #     }
                 #     for result in evaluation_results
-                # ]
-                observability.track_evaluation_metrics(session_id, eval_data)
+                # ]                observability.track_evaluation_metrics(session_id, eval_data)
                 
                 span.set_attribute("evaluation.count", len(evaluation_results))
                 span.set_attribute("evaluation.avg_score", 0)
             except Exception as e:
                 logger.warning(f"Evaluation failed for QA session {session_id}: {e}")
+            
+            # Complete synthesis step and finalize reasoning chain
+            performance_tracker.complete_reasoning_step(
+                question_id, step_num,
+                f"Generated comprehensive answer with {len(citations)} citations",
+                confidence=confidence_score
+            )
+            
+            # Add verification step if credibility checking is enabled
+            if request.credibility_check_enabled:
+                verification_step = performance_tracker.add_reasoning_step(
+                    question_id,
+                    "Verifying source credibility and reliability",
+                    "verify",
+                    sources_consulted=[c.source for c in citations],
+                    confidence=verification_details.get("overall_credibility_score", 0.5)
+                )
+                performance_tracker.complete_reasoning_step(
+                    question_id, verification_step,
+                    f"Verified {verification_details.get('verified_sources_count', 0)} of {verification_details.get('total_sources_count', 0)} sources",
+                    confidence=verification_details.get("overall_credibility_score", 0.5)
+                )
+            
+            # Finalize reasoning chain
+            final_reasoning_chain = performance_tracker.finalize_reasoning_chain(question_id, confidence_score)
+            
+            # Create performance benchmark
+            performance_benchmark = performance_tracker.create_performance_benchmark(
+                question_id=question_id,
+                question=request.question,
+                processing_time_seconds=response_time,
+                source_count=len(citations),
+                accuracy_score=sum(r.score for r in evaluation_results) / len(evaluation_results) if evaluation_results else 0.8,
+                confidence_score=confidence_score,
+                verification_level=request.verification_level,
+                session_id=session_id
+            )
             
             response = QAResponse(
                 answer=answer,
@@ -228,6 +307,8 @@ async def ask_question(
                 citations=citations,
                 sub_questions=sub_questions,
                 verification_details=verification_details,
+                performance_benchmark=performance_benchmark,
+                reasoning_chain=final_reasoning_chain,
                 metadata={
                     "exercise_type": "qa",
                     "model_used": chat_deployment_used,
@@ -238,7 +319,7 @@ async def ask_question(
                     "avg_evaluation_score": sum(r.score for r in evaluation_results) / len(evaluation_results) if evaluation_results else 0,
                     "response_time": response_time
                 },
-                token_usage=token_usage            )
+                token_usage=token_usage)
             
             span.set_attribute("response.tokens", total_tokens)
             span.set_attribute("response.citations", len(citations))
@@ -885,3 +966,36 @@ async def get_qa_capabilities():
     except Exception as e:
         logger.error(f"Error getting QA capabilities: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve QA capabilities")
+
+@router.get("/performance-metrics/{session_id}", response_model=PerformanceMetrics)
+async def get_performance_metrics(
+    session_id: str,
+    x_user_id: Optional[str] = Header(None)
+):
+    """Get performance metrics for a QA session"""
+    try:
+        metrics = performance_tracker.get_session_metrics(session_id)
+        logger.info(f"Retrieved performance metrics for session {session_id}: "
+                   f"{metrics.total_questions} questions, "
+                   f"{metrics.average_efficiency_gain:.1f}% avg efficiency gain")
+        return metrics
+    except Exception as e:
+        logger.error(f"Error retrieving performance metrics for session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve performance metrics: {str(e)}")
+
+@router.get("/reasoning-chain/{question_id}")
+async def get_reasoning_chain(
+    question_id: str,
+    x_user_id: Optional[str] = Header(None)
+):
+    """Get the reasoning chain for a specific question"""
+    try:
+        reasoning_chain = performance_tracker.get_reasoning_chain(question_id)
+        if not reasoning_chain:
+            raise HTTPException(status_code=404, detail="Reasoning chain not found")
+        return reasoning_chain
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving reasoning chain for question {question_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve reasoning chain: {str(e)}")

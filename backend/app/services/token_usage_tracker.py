@@ -688,6 +688,83 @@ class TokenUsageTracker:
         del self._active_sessions[tracking_id]
         
         logger.info(f"Finalized token tracking for session {tracking_id}")
+    
+    async def get_detailed_requests(
+        self, 
+        days_back: int = 7,
+        service_type: Optional[ServiceType] = None,
+        deployment_name: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get detailed request logs for admin dashboard"""
+        try:
+            if not self.azure_manager or not self.azure_manager.cosmos_client:
+                return []
+            
+            start_date = datetime.now(timezone.utc) - timedelta(days=days_back)
+            
+            # Get the container
+            database = self.azure_manager.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
+            container = database.get_container_client(settings.AZURE_COSMOS_TOKEN_USAGE_CONTAINER_NAME)
+            
+            # Build query
+            query = "SELECT * FROM c WHERE c.timestamp >= @start_date"
+            parameters = [{"name": "@start_date", "value": start_date.isoformat()}]
+            
+            if service_type:
+                query += " AND c.service_type = @service_type"
+                parameters.append({"name": "@service_type", "value": service_type.value})
+            
+            if deployment_name:
+                query += " AND (c.model_name = @deployment_name OR c.deployment_name = @deployment_name)"
+                parameters.append({"name": "@deployment_name", "value": deployment_name})
+            
+            # Add ordering and pagination
+            query += " ORDER BY c.timestamp DESC"
+            
+            # Execute query
+            items = list(container.query_items(
+                query=query,
+                parameters=parameters,
+                enable_cross_partition_query=True
+            ))
+            
+            # Apply pagination
+            paginated_items = items[offset:offset + limit]
+            
+            # Format the results for the admin dashboard
+            detailed_requests = []
+            for item in paginated_items:
+                detailed_request = {
+                    "record_id": item.get("record_id"),
+                    "timestamp": item.get("timestamp"),
+                    "session_id": item.get("session_id"),
+                    "service_type": item.get("service_type"),
+                    "operation_type": item.get("operation_type"),
+                    "model_name": item.get("model_name"),
+                    "deployment_name": item.get("deployment_name"),
+                    "request_text": item.get("request_text", "")[:200] + "..." if item.get("request_text", "") and len(item.get("request_text", "")) > 200 else item.get("request_text", ""),
+                    "response_text": item.get("response_text", "")[:200] + "..." if item.get("response_text", "") and len(item.get("response_text", "")) > 200 else item.get("response_text", ""),
+                    "prompt_tokens": item.get("prompt_tokens", 0),
+                    "completion_tokens": item.get("completion_tokens", 0),
+                    "total_tokens": item.get("total_tokens", 0),
+                    "total_cost": item.get("total_cost", 0.0),
+                    "duration_ms": item.get("duration_ms", 0),
+                    "success": item.get("success", True),
+                    "verification_level": item.get("verification_level"),
+                    "credibility_check_enabled": item.get("credibility_check_enabled", False),
+                    "temperature": item.get("temperature"),
+                    "max_tokens": item.get("max_tokens"),
+                    "error_message": item.get("error_message")
+                }
+                detailed_requests.append(detailed_request)
+            
+            return detailed_requests
+            
+        except Exception as e:
+            logger.error(f"Failed to get detailed requests: {e}")
+            return []
         
 # Global instance
 token_tracker = TokenUsageTracker()

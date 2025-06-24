@@ -8,6 +8,8 @@ import { AnswerDisplay } from './AnswerDisplay';
 import { SourceVerification } from './SourceVerificationModal';
 import { QuestionDecomposition } from './QuestionDecomposition';
 import { AgentServiceStatus } from './AgentServiceStatus';
+import { PerformanceDashboard } from './PerformanceDashboard';
+import { ReasoningChainDisplay } from './ReasoningChainDisplay';
 import { ModelSettings } from '../shared/ModelConfiguration';
 import { apiService } from '../../services/api';
 
@@ -31,6 +33,38 @@ export interface QAAnswer {
     verifiedSourcesCount: number;
     totalSourcesCount: number;
     verificationSummary: string;
+  };
+  performanceBenchmark?: {
+    question_id: string;
+    question: string;
+    complexity_score: number;
+    estimated_manual_time: number;
+    ai_processing_time: number;
+    efficiency_gain: number;
+    source_count: number;
+    accuracy_score: number;
+    confidence_score: number;
+    verification_level: string;
+    session_id: string;
+    timestamp: string;
+  };
+  reasoningChain?: {
+    question_id: string;
+    question: string;
+    reasoning_steps: Array<{
+      step_number: number;
+      description: string;
+      action_type: string;
+      sources_consulted: string[];
+      confidence: number;
+      duration_ms: number;
+      output: string;
+      metadata: { [key: string]: any };
+    }>;
+    total_duration_ms: number;
+    final_confidence: number;
+    session_id: string;
+    timestamp: string;
   };
   metadata: {
     model?: string;
@@ -89,6 +123,10 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
   const [showAgentStatus, setShowAgentStatus] = useState(false);
   const [agentServiceConnected, setAgentServiceConnected] = useState(false);
   const [credibilityCheckEnabled, setCredibilityCheckEnabled] = useState(false); // Off by default
+  const [showPerformanceDashboard, setShowPerformanceDashboard] = useState(false);
+  const [showReasoningChain, setShowReasoningChain] = useState(false);
+  const [sessionMetrics, setSessionMetrics] = useState<any>(null);
+  const [selectedReasoningChain, setSelectedReasoningChain] = useState<any>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -144,8 +182,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
         temperature: modelSettings.temperature,
         credibility_check_enabled: credibilityCheckEnabled, // Pass the toggle state
       });
-      
-      const qaAnswer: QAAnswer = {
+        const qaAnswer: QAAnswer = {
         id: (Date.now() + 1).toString(),
         questionId: qaQuestion.id,
         answer: data.answer,
@@ -158,7 +195,10 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
           verifiedSourcesCount: data.verification_details?.verified_sources_count || 0,
           totalSourcesCount: data.verification_details?.total_sources_count || 0,
           verificationSummary: data.verification_details?.verification_summary || 'No verification details available',
-        },        metadata: {
+        },
+        performanceBenchmark: data.performance_benchmark,
+        reasoningChain: data.reasoning_chain,
+        metadata: {
           model: data.verification_details?.chat_model_used || data.metadata?.model_used || modelSettings.selectedModel,
           tokens: data.token_usage?.total_tokens,
           responseTime: data.metadata?.response_time,
@@ -245,7 +285,6 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
       setIsVerifyingSourcesForAnswer(null);
     }
   };
-
   const handleNewSession = () => {
     const newSessionId = generateSessionId();
     setCurrentSessionId(newSessionId);
@@ -255,8 +294,12 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     setShowSourceVerificationModal(false);
     setShowQuestionDecomposition(false);
     setShowAgentStatus(false);
+    setShowPerformanceDashboard(false);
+    setShowReasoningChain(false);
     setVerifiedSources([]);
     setDecomposedQuestions(null);
+    setSessionMetrics(null);
+    setSelectedReasoningChain(null);
     setIsVerifyingSourcesForAnswer(null);
   };
 
@@ -266,6 +309,34 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
 
   const handleRefreshAgentStatus = () => {
     checkAgentServiceStatus();
+  };
+
+  const handleShowPerformanceDashboard = async () => {
+    setShowPerformanceDashboard(!showPerformanceDashboard);
+    if (!showPerformanceDashboard) {
+      try {
+        const metrics = await apiService.getPerformanceMetrics(currentSessionId);
+        setSessionMetrics(metrics);
+      } catch (error) {
+        console.error('Error fetching performance metrics:', error);
+      }
+    }
+  };
+
+  const handleShowReasoningChain = async (questionId: string) => {
+    try {
+      const reasoningChain = await apiService.getReasoningChain(questionId);
+      setSelectedReasoningChain(reasoningChain);
+      setShowReasoningChain(true);
+    } catch (error) {
+      console.error('Error fetching reasoning chain:', error);
+    }
+  };
+
+  const getCurrentAnswerBenchmark = () => {
+    if (answers.length === 0) return undefined;
+    const latestAnswer = answers[answers.length - 1];
+    return latestAnswer.performanceBenchmark;
   };
 
   return (
@@ -296,11 +367,11 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                             Decompose
                           </button>
                         </div>
-                      </div>
-                        {answer && (
+                      </div>                        {answer && (
                         <AnswerDisplay
                           answer={answer}
                           onVerifySources={() => handleVerifySources(answer)}
+                          onShowReasoningChain={answer.reasoningChain ? () => handleShowReasoningChain(answer.reasoningChain?.question_id || '') : undefined}
                           isVerifyingSources={isVerifyingSourcesForAnswer === answer.id}
                           credibilityCheckEnabled={credibilityCheckEnabled}
                         />
@@ -334,8 +405,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                   className="px-3 py-1 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
                 >
                   New QA Session
-                </button>
-                <button
+                </button>                <button
                   onClick={handleToggleAgentStatus}
                   className={`px-3 py-1 text-sm rounded-md hover:opacity-80 ${
                     agentServiceConnected 
@@ -344,6 +414,13 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                   }`}
                 >
                   Agent Status
+                </button>
+                
+                <button
+                  onClick={handleShowPerformanceDashboard}
+                  className="px-3 py-1 text-sm bg-blue-100 text-blue-800 border border-blue-200 rounded-md hover:opacity-80"
+                >
+                  Performance
                 </button>
                 
                 {/* Credibility Check Toggle */}
@@ -375,8 +452,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
             </div>
           </div>
         </ResizablePanel>
-        
-        {(showQuestionDecomposition || showAgentStatus) && (
+          {(showQuestionDecomposition || showAgentStatus || showPerformanceDashboard || showReasoningChain) && (
           <>
             <ResizableHandle />
             <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
@@ -386,6 +462,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                   onClose={() => setShowQuestionDecomposition(false)}
                 />
               )}
+              
               {showAgentStatus && (
                 <div className="p-4">
                   <div className="flex items-center justify-between mb-4">
@@ -400,6 +477,35 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                   <AgentServiceStatus 
                     onRefresh={handleRefreshAgentStatus} 
                     isVisible={showAgentStatus}
+                  />
+                </div>
+              )}
+              
+              {showPerformanceDashboard && (
+                <div className="p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium">Performance Analytics</h3>
+                    <button
+                      onClick={() => setShowPerformanceDashboard(false)}
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      ✕ Close
+                    </button>
+                  </div>
+                  <PerformanceDashboard
+                    benchmark={getCurrentAnswerBenchmark()}
+                    sessionMetrics={sessionMetrics}
+                    isVisible={showPerformanceDashboard}
+                  />
+                </div>
+              )}
+              
+              {showReasoningChain && selectedReasoningChain && (
+                <div className="p-4">
+                  <ReasoningChainDisplay
+                    reasoningChain={selectedReasoningChain}
+                    isVisible={showReasoningChain}
+                    onClose={() => setShowReasoningChain(false)}
                   />
                 </div>
               )}

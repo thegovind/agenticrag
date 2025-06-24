@@ -583,3 +583,47 @@ async def get_system_metrics():
             },
             "timestamp": datetime.now().isoformat()
         }
+
+@router.get("/token-usage/requests")
+async def get_token_usage_requests(
+    days: int = Query(7, ge=1, le=90),
+    service_type: Optional[str] = Query(None),
+    deployment_name: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
+    """Get detailed token usage request logs"""
+    try:
+        observability.track_request("admin_token_requests")
+        
+        # Initialize token tracker
+        token_tracker = TokenUsageTracker()
+        await token_tracker.initialize()
+        
+        # Get detailed request logs
+        requests = await token_tracker.get_detailed_requests(
+            days_back=days,
+            service_type=ServiceType(service_type) if service_type else None,
+            deployment_name=deployment_name,
+            limit=limit,
+            offset=offset
+        )
+        
+        return {
+            "requests": requests,
+            "period_days": days,
+            "filters": {
+                "service_type": service_type,
+                "deployment_name": deployment_name
+            },
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": len(requests)
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting token usage requests: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve token usage requests")

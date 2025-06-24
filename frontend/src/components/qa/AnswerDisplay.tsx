@@ -12,6 +12,7 @@ import { QAAnswer, QACitation } from './QAContainer';
 interface AnswerDisplayProps {
   answer: QAAnswer;
   onVerifySources: () => void;
+  onShowReasoningChain?: () => void;
   isVerifyingSources?: boolean;
   credibilityCheckEnabled?: boolean;
 }
@@ -19,6 +20,7 @@ interface AnswerDisplayProps {
 export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({ 
   answer, 
   onVerifySources, 
+  onShowReasoningChain,
   isVerifyingSources = false,
   credibilityCheckEnabled = false
 }) => {
@@ -166,24 +168,36 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
             <h4 className="text-sm font-medium text-foreground">
               Source Verification ({answer.citations.length} sources)
             </h4>
-            {credibilityCheckEnabled && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onVerifySources}
-                disabled={isVerifyingSources}
-                className="text-xs"
-              >
-                {isVerifyingSources ? (
-                  <div className="flex items-center space-x-2">
-                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"></div>
-                    <span>Verifying Sources...</span>
-                  </div>
-                ) : (
-                  'Verify Sources'
-                )}
-              </Button>
-            )}
+            <div className="flex items-center space-x-2">
+              {onShowReasoningChain && answer.reasoningChain && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onShowReasoningChain}
+                  className="text-xs"
+                >
+                  Show Reasoning
+                </Button>
+              )}
+              {credibilityCheckEnabled && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onVerifySources}
+                  disabled={isVerifyingSources}
+                  className="text-xs"
+                >
+                  {isVerifyingSources ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"></div>
+                      <span>Verifying Sources...</span>
+                    </div>
+                  ) : (
+                    'Verify Sources'
+                  )}
+                </Button>
+              )}
+            </div>
           </div>
 
           {/* Enhanced progress indicator when verifying */}

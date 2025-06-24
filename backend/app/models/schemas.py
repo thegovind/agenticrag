@@ -1,7 +1,10 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from datetime import datetime
 from enum import Enum
+
+if TYPE_CHECKING:
+    from .schemas import PerformanceBenchmark, ReasoningChain
 
 class EmbeddingModel(str, Enum):
     ADA_002 = "text-embedding-ada-002"
@@ -157,6 +160,8 @@ class QAResponse(BaseModel):
     citations: List[Citation] = Field(default_factory=list)
     sub_questions: List[str] = Field(default_factory=list, description="Sub-questions that were researched")
     verification_details: Dict[str, Any] = Field(default_factory=dict, description="Source verification details")
+    performance_benchmark: Optional["PerformanceBenchmark"] = None
+    reasoning_chain: Optional["ReasoningChain"] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     token_usage: Dict[str, int] = Field(default_factory=dict)
 
@@ -200,3 +205,47 @@ class SourceVerificationResponse(BaseModel):
     verification_summary: str = Field(..., description="Summary of verification results")
     session_id: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class PerformanceBenchmark(BaseModel):
+    question_id: str = Field(..., description="Unique identifier for the question")
+    question: str = Field(..., description="The original question")
+    complexity_score: int = Field(ge=1, le=5, description="Question complexity score (1=simple, 5=very complex)")
+    estimated_manual_time: float = Field(..., description="Estimated manual research time in minutes")
+    ai_processing_time: float = Field(..., description="Actual AI processing time in minutes")
+    efficiency_gain: float = Field(ge=0, description="Percentage improvement over manual research")
+    source_count: int = Field(ge=0, description="Number of sources analyzed")
+    accuracy_score: float = Field(ge=0.0, le=1.0, description="Answer accuracy score")
+    confidence_score: float = Field(ge=0.0, le=1.0, description="Confidence in the answer")
+    verification_level: VerificationLevel
+    session_id: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class ReasoningStep(BaseModel):
+    step_number: int = Field(ge=1, description="Sequential step number")
+    description: str = Field(..., description="Description of this reasoning step")
+    action_type: str = Field(..., description="Type of action: search, analyze, synthesize, verify")
+    sources_consulted: List[str] = Field(default_factory=list, description="Sources referenced in this step")
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence in this step")
+    duration_ms: int = Field(ge=0, description="Duration of this step in milliseconds")
+    output: str = Field(..., description="Output or result of this step")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class ReasoningChain(BaseModel):
+    question_id: str = Field(..., description="Unique identifier for the question")
+    question: str = Field(..., description="The original question")
+    reasoning_steps: List[ReasoningStep] = Field(..., description="Sequential reasoning steps")
+    total_duration_ms: int = Field(ge=0, description="Total reasoning duration in milliseconds")
+    final_confidence: float = Field(ge=0.0, le=1.0, description="Final confidence in the answer")
+    session_id: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+class PerformanceMetrics(BaseModel):
+    total_questions: int = Field(ge=0, description="Total questions processed")
+    average_efficiency_gain: float = Field(ge=0, description="Average efficiency improvement percentage")
+    average_accuracy_score: float = Field(ge=0.0, le=1.0, description="Average answer accuracy")
+    average_processing_time: float = Field(ge=0, description="Average AI processing time in minutes")
+    complexity_breakdown: Dict[int, int] = Field(default_factory=dict, description="Question count by complexity level")
+    time_saved_minutes: float = Field(ge=0, description="Total time saved vs manual research")
+    session_id: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)

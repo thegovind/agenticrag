@@ -223,14 +223,15 @@ class ApiService {
     chat_model?: string;
     embedding_model?: string;
     temperature?: number;
-    credibility_check_enabled?: boolean;
-  }): Promise<{
+    credibility_check_enabled?: boolean;  }): Promise<{
     answer: string;
     session_id: string;
     confidence_score: number;
     citations: any[];
     sub_questions: string[];
     verification_details: any;
+    performance_benchmark?: any;
+    reasoning_chain?: any;
     metadata: any;
     token_usage: any;
   }> {
@@ -277,6 +278,85 @@ class ApiService {
     agent_status: any;
   }> {
     return this.makeRequest('/qa/capabilities');
+  }
+
+  async getPerformanceMetrics(sessionId: string): Promise<{
+    total_questions: number;
+    average_efficiency_gain: number;
+    average_accuracy_score: number;
+    average_processing_time: number;
+    complexity_breakdown: { [key: number]: number };
+    time_saved_minutes: number;
+    session_id: string;
+    timestamp: string;
+  }> {
+    return this.makeRequest(`/qa/performance-metrics/${sessionId}`);
+  }
+
+  async getReasoningChain(questionId: string): Promise<{
+    question_id: string;
+    question: string;
+    reasoning_steps: Array<{
+      step_number: number;
+      description: string;
+      action_type: string;
+      sources_consulted: string[];
+      confidence: number;
+      duration_ms: number;
+      output: string;
+      metadata: { [key: string]: any };
+    }>;
+    total_duration_ms: number;
+    final_confidence: number;
+    session_id: string;
+    timestamp: string;
+  }> {
+    return this.makeRequest(`/qa/reasoning-chain/${questionId}`);
+  }
+
+  // Admin API methods
+  async getTokenUsageRequests(params: {
+    days?: number;
+    service_type?: string;
+    deployment_name?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<{
+    requests: Array<{
+      record_id: string;
+      timestamp: string;
+      session_id: string;
+      service_type: string;
+      operation_type: string;
+      model_name: string;
+      deployment_name: string;
+      request_text: string;
+      response_text: string;
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      total_cost: number;
+      duration_ms: number;
+      success: boolean;
+      verification_level?: string;
+      credibility_check_enabled: boolean;
+      temperature?: number;
+      max_tokens?: number;
+      error_message?: string;
+    }>;
+    period_days: number;
+    filters: any;
+    pagination: any;
+    timestamp: string;
+  }> {
+    const queryParams = new URLSearchParams();
+    if (params.days) queryParams.append('days', params.days.toString());
+    if (params.service_type) queryParams.append('service_type', params.service_type);
+    if (params.deployment_name) queryParams.append('deployment_name', params.deployment_name);
+    if (params.limit) queryParams.append('limit', params.limit.toString());
+    if (params.offset) queryParams.append('offset', params.offset.toString());
+    
+    return this.makeRequest(`/admin/token-usage/requests?${queryParams.toString()}`);
   }
 }
 
