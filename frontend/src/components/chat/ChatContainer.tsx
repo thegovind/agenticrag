@@ -264,7 +264,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ modelSettings }) =
             <ResizableHandle />
             <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
               <div className="flex flex-col h-full space-y-4 p-4">
-                <ChatAgentServiceStatus />
+                <ChatAgentServiceStatus 
+                  isVisible={showCitationPanel || showSessionHistory}
+                />
                 {showCitationPanel && (
                   <CitationPanel
                     citations={selectedCitations}

@@ -20,6 +20,7 @@ from app.core.observability import observability
 from app.services.multi_agent_orchestrator import MultiAgentOrchestrator, AgentType
 from app.services.azure_ai_agent_service import AzureAIAgentService
 from app.services.azure_services import AzureServiceManager
+from app.services.token_usage_tracker import TokenUsageTracker, ServiceType, OperationType
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -34,6 +35,23 @@ async def ask_question(
     start_time = time.time()
     session_id = x_session_id or request.session_id or str(uuid.uuid4())
     
+    # Initialize token usage tracker
+    token_tracker = TokenUsageTracker()
+    await token_tracker.initialize()
+    
+    # Start tracking the main QA operation
+    tracking_id = token_tracker.start_tracking(
+        session_id=session_id,
+        service_type=ServiceType.QA_SERVICE,
+        operation_type=OperationType.ANSWER_GENERATION,
+        endpoint="/qa/ask",
+        user_id=x_user_id,
+        request_text=request.question,
+        temperature=request.temperature,
+        verification_level=request.verification_level.value if request.verification_level else None,
+        credibility_check_enabled=request.credibility_check_enabled
+    )
+    
     try:
         async with observability.trace_operation(
             "qa_processing",
@@ -41,9 +59,19 @@ async def ask_question(
             model=request.chat_model,
             verification_level=request.verification_level
         ) as span:
-            
             observability.track_request("qa_ask", session_id=session_id)
             logger.info(f"QA request received for session {session_id}, question: {request.question[:100]}...")
+            
+            # Define helper function for extracting deployment names (handle combined strings like "gpt-4o (chat4o)")
+            def extract_deployment_name(model_value: str) -> str:
+                if not model_value:
+                    return "unknown"
+                if '(' in model_value and ')' in model_value:
+                    try:
+                        return model_value.split('(')[1].split(')')[0].strip()
+                    except (IndexError, AttributeError):
+                        return model_value
+                return model_value
             
             logger.info("Initializing Azure services...")
             azure_manager = AzureServiceManager()
@@ -56,18 +84,34 @@ async def ask_question(
             
             logger.info("Creating multi-agent orchestrator...")
             from app.services.multi_agent_orchestrator import MultiAgentOrchestrator
-            orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)            
+            orchestrator = MultiAgentOrchestrator(azure_manager, kb_manager)
+            
             logger.info("Getting Azure AI Agent Service...")
             azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
             logger.info(f"Azure AI Agent Service type: {type(azure_ai_agent_service).__name__}")
             
-            logger.info("Processing QA request with Azure AI Agent Service...")
+            logger.info("Processing QA request with Azure AI Agent Service...")            
+              # Create separate tracking session for embedding operations
+            embedding_tracking_id = token_tracker.start_tracking(
+                session_id=session_id,
+                service_type=ServiceType.QA_SERVICE,
+                operation_type=OperationType.EMBEDDING_GENERATION,
+                endpoint="/api/v1/qa/ask",
+                user_id=x_user_id,
+                model_name=request.embedding_model,
+                deployment_name=extract_deployment_name(request.embedding_model)
+            )
+            logger.info(f"Started separate embedding tracking session: {embedding_tracking_id}")
+            
             qa_result = await azure_ai_agent_service.process_qa_request(
                 question=request.question,
                 context={
                     **(request.context or {}),
                     'kb_manager': kb_manager,
-                    'credibility_check_enabled': request.credibility_check_enabled
+                    'credibility_check_enabled': request.credibility_check_enabled,
+                    'token_tracker': token_tracker,
+                    'tracking_id': tracking_id,
+                    'embedding_tracking_id': embedding_tracking_id  # Pass separate embedding tracking ID
                 },
                 verification_level=request.verification_level,
                 session_id=session_id,
@@ -78,17 +122,6 @@ async def ask_question(
                 }
             )
             logger.info(f"QA result received: {len(qa_result.get('answer', ''))} characters")
-            
-            # Extract deployment names from request (handle combined strings like "gpt-4o (chat4o)")
-            def extract_deployment_name(model_value: str) -> str:
-                if not model_value:
-                    return "unknown"
-                if '(' in model_value and ')' in model_value:
-                    try:
-                        return model_value.split('(')[1].split(')')[0].strip()
-                    except (IndexError, AttributeError):
-                        return model_value
-                return model_value
             
             chat_deployment_used = extract_deployment_name(request.chat_model)
             embedding_deployment_used = extract_deployment_name(request.embedding_model)
@@ -110,8 +143,7 @@ async def ask_question(
                     section_title=source.get("section_title"),
                     confidence=source.get("confidence", "medium"),
                     url=source.get("url", ""),
-                    credibility_score=source.get("credibility_score", 0.5)
-                ))
+                    credibility_score=source.get("credibility_score", 0.5)                ))
             
             prompt_tokens = len(request.question.split()) * 1.3
             completion_tokens = len(answer.split()) * 1.3
@@ -120,7 +152,18 @@ async def ask_question(
             token_usage = {
                 "prompt_tokens": int(prompt_tokens),
                 "completion_tokens": int(completion_tokens),
-                "total_tokens": total_tokens            }
+                "total_tokens": total_tokens
+            }
+            
+            # Update token tracking with actual usage
+            await token_tracker.update_usage(
+                tracking_id=tracking_id,
+                model_name=request.chat_model,
+                deployment_name=chat_deployment_used,
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                response_text=answer
+            )
             
             observability.track_tokens(
                 model=chat_deployment_used,
@@ -132,7 +175,8 @@ async def ask_question(
             response_time = time.time() - start_time
             
             sources = []
-            for citation in citations:                sources.append({
+            for citation in citations:
+                sources.append({
                     "content": citation.content,
                     "source": citation.source,
                     "title": citation.document_title,
@@ -194,17 +238,39 @@ async def ask_question(
                     "avg_evaluation_score": sum(r.score for r in evaluation_results) / len(evaluation_results) if evaluation_results else 0,
                     "response_time": response_time
                 },
-                token_usage=token_usage
-            )
+                token_usage=token_usage            )
             
             span.set_attribute("response.tokens", total_tokens)
             span.set_attribute("response.citations", len(citations))
             span.set_attribute("response.confidence", confidence_score)
             span.set_attribute("response.sub_questions", len(sub_questions))
             
+            # Finalize token tracking 
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "sources_count": len(citations),
+                    "confidence_score": confidence_score,
+                    "sub_questions_count": len(sub_questions),
+                    "verification_details": verification_details
+                }            )
+            
             return response
         
     except Exception as e:
+        # Finalize token tracking with error
+        try:
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=False,
+                http_status_code=500,
+                error_message=str(e)
+            )
+        except Exception as tracker_error:
+            logger.warning(f"Failed to finalize token tracking: {tracker_error}")
+            
         observability.track_error(
             error_type=type(e).__name__,
             endpoint="/api/v1/qa/ask",
@@ -226,12 +292,36 @@ async def decompose_question(
     start_time = time.time()
     session_id = x_session_id or str(uuid.uuid4())
     
+    # Initialize token usage tracker
+    token_tracker = TokenUsageTracker()
+    await token_tracker.initialize()
+    
+    # Start tracking the decomposition operation
+    tracking_id = token_tracker.start_tracking(
+        session_id=session_id,
+        service_type=ServiceType.QA_SERVICE,
+        operation_type=OperationType.QUESTION_DECOMPOSITION,
+        endpoint="/qa/decompose",
+        user_id=x_user_id,
+        request_text=request.question
+    )
+    
     try:
         async with observability.trace_operation(
             "question_decomposition",
             session_id=session_id,
-            model=request.chat_model
-        ) as span:
+            model=request.chat_model        ) as span:
+            
+            # Define helper function for extracting deployment names
+            def extract_deployment_name(model_value: str) -> str:
+                if not model_value:
+                    return "unknown"
+                if '(' in model_value and ')' in model_value:
+                    try:
+                        return model_value.split('(')[1].split(')')[0].strip()
+                    except (IndexError, AttributeError):
+                        return model_value
+                return model_value
             
             observability.track_request("qa_decompose", session_id=session_id)
             logger.info(f"Question decomposition request for session {session_id}")
@@ -252,26 +342,28 @@ async def decompose_question(
                 session_id=session_id,
                 model_config={
                     "chat_model": request.chat_model
-                }
-            )
+                }            )
             
             sub_questions = decomposition_result.get("sub_questions", [])
             reasoning = decomposition_result.get("reasoning", "Question decomposition completed.")
             
             response_time = time.time() - start_time
             
-            # Extract deployment name for metadata consistency
-            def extract_deployment_name(model_value: str) -> str:
-                if not model_value:
-                    return "unknown"
-                if '(' in model_value and ')' in model_value:
-                    try:
-                        return model_value.split('(')[1].split(')')[0].strip()
-                    except (IndexError, AttributeError):
-                        return model_value
-                return model_value
-            
             chat_deployment_used = extract_deployment_name(request.chat_model)
+            
+            # Estimate token usage for decomposition operation
+            prompt_tokens = len(request.question.split()) * 1.3
+            completion_tokens = len(reasoning.split()) * 1.3
+            
+            # Update token tracking with usage
+            await token_tracker.update_usage(
+                tracking_id=tracking_id,
+                model_name=request.chat_model,
+                deployment_name=chat_deployment_used,
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                response_text=reasoning
+            )
             
             response = QuestionDecompositionResponse(
                 original_question=request.question,
@@ -286,9 +378,31 @@ async def decompose_question(
             
             span.set_attribute("response.sub_questions_count", len(sub_questions))
             
+            # Finalize token tracking
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "sub_questions_count": len(sub_questions),
+                    "operation_type": "question_decomposition"
+                }
+            )
+            
             return response
         
     except Exception as e:
+        # Finalize token tracking with error
+        try:
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=False,
+                http_status_code=500,
+                error_message=str(e)
+            )
+        except Exception as tracker_error:
+            logger.warning(f"Failed to finalize token tracking: {tracker_error}")
+            
         observability.track_error(
             error_type=type(e).__name__,
             endpoint="/api/v1/qa/decompose",
@@ -309,6 +423,20 @@ async def verify_sources_flexible(
     """Flexible verify sources endpoint that handles different payload formats"""
     start_time = time.time()
     session_id = request_data.get("session_id") or x_session_id or str(uuid.uuid4())
+    
+    # Initialize token usage tracker
+    token_tracker = TokenUsageTracker()
+    await token_tracker.initialize()
+    
+    # Start tracking the source verification operation
+    tracking_id = token_tracker.start_tracking(
+        session_id=session_id,
+        service_type=ServiceType.QA_SERVICE,
+        operation_type=OperationType.SOURCE_VERIFICATION,
+        endpoint="/qa/verify-sources",
+        user_id=x_user_id,
+        request_text=str(request_data)
+    )
     
     try:
         async with observability.trace_operation(
@@ -373,8 +501,7 @@ async def verify_sources_flexible(
             overall_credibility = verification_result.get("overall_credibility_score", 0.5)
             
             response_time = time.time() - start_time
-            
-            # Ensure all credibility scores are proper numbers
+              # Ensure all credibility scores are proper numbers
             for source in verified_sources:
                 score = source.get("credibility_score", 0.0)
                 if score is None or str(score).lower() == 'nan':
@@ -385,6 +512,21 @@ async def verify_sources_flexible(
             overall_credibility = overall_credibility or 0.0
             if str(overall_credibility).lower() == 'nan':
                 overall_credibility = 0.0
+            
+            # Estimate token usage for source verification
+            content_length = sum(len(s.get("content", "")) for s in sources_dict)
+            prompt_tokens = content_length // 3  # Rough estimation 
+            completion_tokens = len(str(verified_sources)) // 3
+            
+            # Update token tracking with usage
+            await token_tracker.update_usage(
+                tracking_id=tracking_id,
+                model_name="gpt-4o",  # Default model for verification
+                deployment_name="chat4o",
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                response_text=str(verified_sources)
+            )
             
             response = {
                 "verified_sources": verified_sources,
@@ -404,9 +546,32 @@ async def verify_sources_flexible(
             span.set_attribute("response.sources_verified", len(verified_sources))
             span.set_attribute("response.overall_credibility", overall_credibility)
             
+            # Finalize token tracking
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "sources_verified": len(verified_sources),
+                    "overall_credibility": overall_credibility,
+                    "operation_type": "source_verification"
+                }
+            )
+            
             return response
         
     except Exception as e:
+        # Finalize token tracking with error
+        try:
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=False,
+                http_status_code=500,
+                error_message=str(e)
+            )
+        except Exception as tracker_error:
+            logger.warning(f"Failed to finalize token tracking: {tracker_error}")
+            
         observability.track_error(
             error_type=type(e).__name__,
             endpoint="/api/v1/qa/verify-sources",
@@ -427,6 +592,20 @@ async def verify_citations(
     """Verify the credibility of Citation objects (alternative endpoint for frontend compatibility)"""
     start_time = time.time()
     session_id = x_session_id or str(uuid.uuid4())
+    
+    # Initialize token usage tracker
+    token_tracker = TokenUsageTracker()
+    await token_tracker.initialize()
+    
+    # Start tracking the citation verification operation
+    tracking_id = token_tracker.start_tracking(
+        session_id=session_id,
+        service_type=ServiceType.QA_SERVICE,
+        operation_type=OperationType.SOURCE_VERIFICATION,
+        endpoint="/qa/verify-citations",
+        user_id=x_user_id,
+        request_text=f"Verifying {len(citations)} citations"
+    )
     
     try:
         async with observability.trace_operation(
@@ -456,8 +635,7 @@ async def verify_citations(
                     "title": citation.document_title,
                     "content": citation.content,
                     "metadata": {
-                        "document_id": citation.document_id,
-                        "page_number": citation.page_number,
+                        "document_id": citation.document_id,                        "page_number": citation.page_number,
                         "section_title": citation.section_title,
                         "credibility_score": citation.credibility_score
                     }
@@ -475,6 +653,21 @@ async def verify_citations(
             
             response_time = time.time() - start_time
             
+            # Estimate token usage for citation verification
+            content_length = sum(len(citation.content or "") for citation in citations)
+            prompt_tokens = content_length // 3  # Rough estimation 
+            completion_tokens = len(str(verified_sources)) // 3
+            
+            # Update token tracking with usage
+            await token_tracker.update_usage(
+                tracking_id=tracking_id,
+                model_name="gpt-4o",  # Default model for verification
+                deployment_name="chat4o",
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                response_text=str(verified_sources)
+            )
+            
             response = SourceVerificationResponse(
                 verified_sources=verified_sources,
                 overall_credibility_score=overall_credibility,
@@ -490,9 +683,32 @@ async def verify_citations(
             span.set_attribute("response.sources_verified", len(verified_sources))
             span.set_attribute("response.overall_credibility", overall_credibility)
             
+            # Finalize token tracking
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "citations_verified": len(verified_sources),
+                    "overall_credibility": overall_credibility,
+                    "operation_type": "citation_verification"
+                }
+            )
+            
             return response
         
     except Exception as e:
+        # Finalize token tracking with error
+        try:
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=False,
+                http_status_code=500,
+                error_message=str(e)
+            )
+        except Exception as tracker_error:
+            logger.warning(f"Failed to finalize token tracking: {tracker_error}")
+            
         observability.track_error(
             error_type=type(e).__name__,
             endpoint="/api/v1/qa/verify-citations",
@@ -517,6 +733,20 @@ async def verify_single_source(
     start_time = time.time()
     session_id = session_id or x_session_id or str(uuid.uuid4())
     
+    # Initialize token usage tracker
+    token_tracker = TokenUsageTracker()
+    await token_tracker.initialize()
+    
+    # Start tracking the single source verification operation
+    tracking_id = token_tracker.start_tracking(
+        session_id=session_id,
+        service_type=ServiceType.QA_SERVICE,
+        operation_type=OperationType.SOURCE_VERIFICATION,
+        endpoint="/qa/verify-source",
+        user_id=x_user_id,
+        request_text=f"Verifying source: {source_url}"
+    )
+    
     try:
         async with observability.trace_operation(
             "single_source_verification",
@@ -540,8 +770,7 @@ async def verify_single_source(
             source_dict = {
                 "id": str(uuid.uuid4()),
                 "url": source_url,
-                "title": title or "Document Source",
-                "content": content,
+                "title": title or "Document Source",                "content": content,
                 "metadata": {
                     "source": source_url,
                     "verification_timestamp": time.time()
@@ -559,6 +788,20 @@ async def verify_single_source(
             
             response_time = time.time() - start_time
             
+            # Estimate token usage for single source verification
+            prompt_tokens = len(content) // 3  # Rough estimation 
+            completion_tokens = len(str(verified_sources)) // 3
+            
+            # Update token tracking with usage
+            await token_tracker.update_usage(
+                tracking_id=tracking_id,
+                model_name="gpt-4o",  # Default model for verification
+                deployment_name="chat4o",
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                response_text=str(verified_sources)
+            )
+            
             response = SourceVerificationResponse(
                 verified_sources=verified_sources,
                 overall_credibility_score=overall_credibility,
@@ -575,9 +818,32 @@ async def verify_single_source(
             span.set_attribute("response.sources_verified", len(verified_sources))
             span.set_attribute("response.overall_credibility", overall_credibility)
             
+            # Finalize token tracking
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "source_verified": True,
+                    "overall_credibility": overall_credibility,
+                    "operation_type": "single_source_verification"
+                }
+            )
+            
             return response
         
     except Exception as e:
+        # Finalize token tracking with error
+        try:
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=False,
+                http_status_code=500,
+                error_message=str(e)
+            )
+        except Exception as tracker_error:
+            logger.warning(f"Failed to finalize token tracking: {tracker_error}")
+            
         observability.track_error(
             error_type=type(e).__name__,
             endpoint="/api/v1/qa/verify-source",

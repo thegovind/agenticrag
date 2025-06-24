@@ -17,6 +17,7 @@ from datetime import datetime, date
 import hashlib
 import json
 from dataclasses import dataclass
+import time
 
 # Configure Windows event loop policy for Azure SDK compatibility
 if platform.system() == "Windows":
@@ -482,16 +483,14 @@ class AzureServiceManager:
                 vector_search=vector_search,
                 semantic_search=semantic_search
             )
-            
             result = self.search_index_client.create_index(index)
             logger.info(f"Successfully created search index '{settings.AZURE_SEARCH_INDEX_NAME}'")
             return True
-            
         except Exception as e:
             logger.error(f"Failed to ensure search index exists: {e}")
             return False
 
-    async def get_embedding(self, text: str, model: str = None) -> List[float]:
+    async def get_embedding(self, text: str, model: str = None, token_tracker=None, tracking_id: str = None) -> List[float]:
         """Get embedding for text using Azure OpenAI async client"""
         try:
             # Use deployment name from settings, not model name
@@ -513,22 +512,38 @@ class AzureServiceManager:
             elapsed_time = time.time() - start_time
             logger.debug(f"✅ [Thread-{thread_id}] Embedding completed in {elapsed_time:.2f}s")
             
+            # Track token usage for embedding if tracker is provided
+            if token_tracker and tracking_id and hasattr(response, 'usage'):
+                try:
+                    await token_tracker.update_usage(
+                        tracking_id=tracking_id,
+                        model_name=deployment_name,
+                        deployment_name=deployment_name,
+                        prompt_tokens=response.usage.prompt_tokens,
+                        completion_tokens=0,  # Embeddings don't have completion tokens
+                        total_tokens=response.usage.total_tokens,
+                        input_text=text[:200] + "..." if len(text) > 200 else text,
+                        output_text=f"Generated embedding vector of dimension {len(response.data[0].embedding)}"
+                    )
+                    logger.info(f"Token usage tracked for embedding: {response.usage.total_tokens} tokens")
+                except Exception as tracking_error:
+                    logger.error(f"Failed to track embedding token usage: {tracking_error}")
             return response.data[0].embedding
         except Exception as e:
             logger.error(f"Failed to get embedding: {e}")
             raise
 
-    async def hybrid_search(self, query: str, top_k: int = 10, filters: str = None, min_score: float = 0.0) -> List[Dict]:
+    async def hybrid_search(self, query: str, top_k: int = 10, filters: str = None, min_score: float = 0.0, token_tracker=None, tracking_id: str = None) -> List[Dict]:
         """Perform hybrid search (vector + keyword) on the knowledge base"""
         try:
+            logger.info(f"🔍 Hybrid search with token tracking: tracker={token_tracker is not None}, tracking_id={tracking_id}")
             # Add timing and thread logging for debugging
             import threading
-            import time
             thread_id = threading.get_ident()
             start_time = time.time()
             logger.debug(f"🔍 [Thread-{thread_id}] Starting hybrid search for query: '{query[:50]}...' (top_k={top_k})")
             
-            query_vector = await self.get_embedding(query)
+            query_vector = await self.get_embedding(query, token_tracker=token_tracker, tracking_id=tracking_id)
             vector_query = VectorizedQuery(
                 vector=query_vector,
                 k_nearest_neighbors=top_k,

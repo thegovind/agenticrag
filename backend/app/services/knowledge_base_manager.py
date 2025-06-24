@@ -238,12 +238,14 @@ class AdaptiveKnowledgeBaseManager:
         except Exception as e:
             logger.error(f"Error scraping company filings from {company_url}: {e}")
     
-    async def _is_document_processed(self, doc_hash: str) -> bool:
+    async def _is_document_processed(self, doc_hash: str, token_tracker=None, tracking_id=None) -> bool:
         """Check if a document has already been processed"""
         try:
             results = await self.azure_manager.hybrid_search(
                 query=f"document_hash:{doc_hash}",
-                top_k=1
+                top_k=1,
+                token_tracker=token_tracker,
+                tracking_id=tracking_id
             )
             return len(results) > 0
         except:
@@ -274,7 +276,7 @@ class AdaptiveKnowledgeBaseManager:
         self.update_queue = []
         logger.info(f"Successfully processed {processed_count} knowledge base updates")
 
-    async def _apply_document_updates(self, document_id: str, updates: List[KnowledgeUpdate]):
+    async def _apply_document_updates(self, document_id: str, updates: List[KnowledgeUpdate], token_tracker=None, tracking_id=None):
         """Apply updates for a specific document to the search index"""
         search_documents = []
         
@@ -289,7 +291,11 @@ class AdaptiveKnowledgeBaseManager:
                 "chunk_index": update.metadata.get("chunk_index", 0),
                 "source_url": update.source,
                 "credibility_score": update.credibility_score,
-                "content_vector": await self.azure_manager.get_embedding(update.content)
+                "content_vector": await self.azure_manager.get_embedding(
+                    update.content, 
+                    token_tracker=token_tracker, 
+                    tracking_id=tracking_id
+                )
             }
             search_documents.append(doc)
         
@@ -297,7 +303,7 @@ class AdaptiveKnowledgeBaseManager:
         if success:
             logger.info(f"Added {len(search_documents)} documents to search index for {document_id}")
 
-    async def _find_similar_content(self, chunks: List[Dict]) -> Dict:
+    async def _find_similar_content(self, chunks: List[Dict], token_tracker=None, tracking_id=None) -> Dict:
         """Find existing content similar to new chunks"""
         similar_content = {}
         
@@ -305,7 +311,9 @@ class AdaptiveKnowledgeBaseManager:
             try:
                 results = await self.azure_manager.hybrid_search(
                     query=chunk["content"][:500],  # Use first 500 chars for similarity
-                    top_k=5
+                    top_k=5,
+                    token_tracker=token_tracker,
+                    tracking_id=tracking_id
                 )
                 
                 similar_results = []
@@ -405,7 +413,9 @@ class AdaptiveKnowledgeBaseManager:
             results = await self.azure_manager.hybrid_search(
                 query="*",  # Match all
                 filters=conflict_query,
-                top_k=100
+                top_k=100,
+                token_tracker=None,  # Conflict resolution is internal operation
+                tracking_id=None
             )
             
             for result in results:
@@ -509,7 +519,9 @@ class AdaptiveKnowledgeBaseManager:
             results = await self.azure_manager.hybrid_search(
                 query="*",
                 filters="superseded eq true",
-                top_k=1000
+                top_k=1000,
+                token_tracker=None,  # Internal operation
+                tracking_id=None
             )
             
             if results:
@@ -563,7 +575,9 @@ class AdaptiveKnowledgeBaseManager:
         try:
             all_docs = await self.azure_manager.hybrid_search(
                 query="*",
-                top_k=10000  # Large number to get all docs
+                top_k=10000,  # Large number to get all docs
+                token_tracker=None,  # Internal stats operation
+                tracking_id=None
             )
             
             # Calculate statistics
@@ -662,7 +676,8 @@ class AdaptiveKnowledgeBaseManager:
             return 0.0
 
     async def search_knowledge_base(self, query: str, filters: Dict = None, 
-                                  top_k: int = 10, chat_model: str = None) -> List[Dict]:
+                                  top_k: int = 10, chat_model: str = None,
+                                  token_tracker=None, tracking_id=None) -> List[Dict]:
         """
         Search the adaptive knowledge base
         
@@ -676,6 +691,7 @@ class AdaptiveKnowledgeBaseManager:
             chat_model: The chat model deployment name to use for relevance explanations
         """
         try:
+            logger.info(f"🔍 Knowledge base search with token tracking: tracker={token_tracker is not None}, tracking_id={tracking_id}")
             filter_str = None
             if filters:
                 filter_parts = []
@@ -693,7 +709,9 @@ class AdaptiveKnowledgeBaseManager:
             results = await self.azure_manager.hybrid_search(
                 query=query,
                 top_k=top_k,
-                filters=filter_str
+                filters=filter_str,
+                token_tracker=token_tracker,
+                tracking_id=tracking_id
             )
             
             enhanced_results = []

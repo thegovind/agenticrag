@@ -200,20 +200,22 @@ class HybridSearchEngine:
         query: str,
         search_type: SearchType = SearchType.HYBRID,
         top_k: int = 10,
-        filters: Dict[str, Any] = None
+        filters: Dict[str, Any] = None,
+        token_tracker=None,
+        tracking_id=None
     ) -> List[SearchResult]:
         """Perform hybrid search across the knowledge base"""
         observability.track_request("hybrid_search")
         
         try:
             if search_type == SearchType.VECTOR:
-                results = await self._vector_search(query, top_k, filters)
+                results = await self._vector_search(query, top_k, filters, token_tracker, tracking_id)
             elif search_type == SearchType.KEYWORD:
                 results = await self._keyword_search(query, top_k, filters)
             elif search_type == SearchType.SEMANTIC:
                 results = await self._semantic_search(query, top_k, filters)
             else:  # HYBRID
-                results = await self._hybrid_search(query, top_k, filters)
+                results = await self._hybrid_search(query, top_k, filters, token_tracker, tracking_id)
             
             logger.info(f"Search completed: type={search_type.value}, results={len(results)}, top_k={top_k}")
             
@@ -226,9 +228,12 @@ class HybridSearchEngine:
         finally:
             pass
     
-    async def _vector_search(self, query: str, top_k: int, filters: Dict[str, Any]) -> List[SearchResult]:
+    async def _vector_search(self, query: str, top_k: int, filters: Dict[str, Any], 
+                           token_tracker=None, tracking_id=None) -> List[SearchResult]:
         """Perform vector similarity search"""
-        query_embedding = await self.azure_manager.generate_embedding(query)
+        query_embedding = await self.azure_manager.generate_embedding(
+            query, token_tracker=token_tracker, tracking_id=tracking_id
+        )
         
         vector_query = VectorizedQuery(
             vector=query_embedding,
@@ -270,9 +275,12 @@ class HybridSearchEngine:
         
         return [self._convert_to_search_result(result) for result in search_results]
     
-    async def _hybrid_search(self, query: str, top_k: int, filters: Dict[str, Any]) -> List[SearchResult]:
+    async def _hybrid_search(self, query: str, top_k: int, filters: Dict[str, Any],
+                           token_tracker=None, tracking_id=None) -> List[SearchResult]:
         """Perform hybrid search combining vector and keyword search"""
-        query_embedding = await self.azure_manager.generate_embedding(query)
+        query_embedding = await self.azure_manager.generate_embedding(
+            query, token_tracker=token_tracker, tracking_id=tracking_id
+        )
         
         vector_query = VectorizedQuery(
             vector=query_embedding,
@@ -386,7 +394,9 @@ class RAGPipeline:
         query: str,
         search_type: SearchType = SearchType.HYBRID,
         context: Dict[str, Any] = None,
-        top_k: int = 10
+        top_k: int = 10,
+        token_tracker=None,
+        tracking_id=None
     ) -> RAGResponse:
         """Process a complete RAG query from start to finish"""
         start_time = datetime.utcnow()
@@ -399,7 +409,9 @@ class RAGPipeline:
                 processed_query['enhanced_query'],
                 search_type,
                 top_k,
-                processed_query['search_filters']
+                processed_query['search_filters'],
+                token_tracker,
+                tracking_id
             )
             
             generated_content = await self._generate_response(

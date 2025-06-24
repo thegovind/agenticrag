@@ -6,8 +6,8 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
-import { Activity, MessageSquare, DollarSign, AlertTriangle, CheckCircle, XCircle, TrendingUp, Database, Cpu, HardDrive, Settings } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
+import { Activity, MessageSquare, DollarSign, AlertTriangle, CheckCircle, XCircle, TrendingUp, Database, Cpu, HardDrive, Settings, Zap, BarChart3 } from 'lucide-react';
 import { ModelConfiguration, ModelConfiguration as ModelConfigType } from './ModelConfiguration';
 
 interface MetricData {
@@ -46,8 +46,18 @@ interface TraceData {
   userId?: string;
 }
 
-export const AdminDashboard: React.FC = () => {
+interface AdminDashboardProps {
+  isActive?: boolean;
+}
+
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isActive = true }) => {
   const [tokenUsage, setTokenUsage] = useState<TokenUsage[]>([]);
+  const [tokenAnalytics, setTokenAnalytics] = useState<any>(null);
+  const [tokenTrends, setTokenTrends] = useState<any[]>([]);
+  const [deploymentUsage, setDeploymentUsage] = useState<any[]>([]);
+  const [serviceUsage, setServiceUsage] = useState<any[]>([]);
+  const [costAnalytics, setCostAnalytics] = useState<any>(null);
+  const [tokenTimeRange, setTokenTimeRange] = useState<string>('7');
   const [evaluationMetrics, setEvaluationMetrics] = useState<EvaluationMetric[]>([]);
   const [traces, setTraces] = useState<TraceData[]>([]);
   const [systemMetrics, setSystemMetrics] = useState<MetricData[]>([]);
@@ -59,17 +69,20 @@ export const AdminDashboard: React.FC = () => {
   const [foundryConnections, setFoundryConnections] = useState<any[]>([]);
   const [foundryProjectInfo, setFoundryProjectInfo] = useState<any>(null);
   const [modelConfig, setModelConfig] = useState<ModelConfigType | null>(null);
-  const [isLoadingFoundryData, setIsLoadingFoundryData] = useState(false);
-
-  useEffect(() => {
+  const [isLoadingFoundryData, setIsLoadingFoundryData] = useState(false);  useEffect(() => {
+    if (!isActive) return;
+    
     fetchDashboardData();
+    fetchTokenAnalytics();
     fetchEvaluationFrameworkConfig();
     fetchFoundryData();
-    
-    const interval = setInterval(() => {
-      fetchDashboardData();
-      fetchFoundryData();
-    }, 30000);
+      const interval = setInterval(() => {
+      if (isActive) {
+        fetchDashboardData();
+        fetchTokenAnalytics();
+        fetchFoundryData();
+      }
+    }, 600000); // Refresh every 60 seconds instead of 30
     setRefreshInterval(interval);
     
     return () => {
@@ -77,37 +90,106 @@ export const AdminDashboard: React.FC = () => {
         clearInterval(refreshInterval);
       }
     };
-  }, []);
-
+  }, [isActive, tokenTimeRange]);
   const fetchDashboardData = async () => {
     try {
       setIsLoading(true);
-      
-      const [tokenResponse, metricsResponse, tracesResponse, systemResponse] = await Promise.all([
-        fetch('/api/admin/token-usage'),
-        fetch('/api/admin/evaluation-metrics'),
-        fetch('/api/admin/traces'),
-        fetch('/api/admin/system-metrics')
+        const [tokenSummaryResponse, evaluationResponse, tracesResponse, systemResponse] = await Promise.all([
+        fetch('/api/v1/admin/token-usage/summary?hours=24'),
+        fetch('/api/v1/admin/evaluation-metrics'),
+        fetch('/api/v1/admin/traces'),
+        fetch('/api/v1/admin/system-metrics')
       ]);
 
-      if (tokenResponse.ok) {
-        const tokenData = await tokenResponse.json();
-        setTokenUsage(tokenData);
-      }
-
-      if (metricsResponse.ok) {
-        const metricsData = await metricsResponse.json();
-        setEvaluationMetrics(metricsData);
-      }
-
-      if (tracesResponse.ok) {
+      if (tokenSummaryResponse.ok) {
+        const tokenData = await tokenSummaryResponse.json();
+        // Transform the summary data to match the existing TokenUsage interface
+        const transformedTokenUsage: TokenUsage[] = tokenData.summary?.top_models?.map(([model, data]: [string, any]) => ({
+          model,
+          totalTokens: data.tokens,
+          inputTokens: Math.round(data.tokens * 0.4), // Estimate
+          outputTokens: Math.round(data.tokens * 0.6), // Estimate
+          cost: data.cost,
+          requests: data.requests
+        })) || [];
+        setTokenUsage(transformedTokenUsage);
+      }      if (evaluationResponse.ok) {
+        const evaluationData = await evaluationResponse.json();
+        // Transform the metrics object into an array format expected by the UI
+        const metricsArray: EvaluationMetric[] = evaluationData.metrics ? [
+          {
+            id: 'relevance',
+            name: 'Relevance',
+            score: evaluationData.metrics.metrics_by_type?.relevance?.average || 0,
+            threshold: 0.8,
+            status: (evaluationData.metrics.metrics_by_type?.relevance?.average || 0) >= 0.8 ? 'pass' : 'warning',
+            description: 'Measures how relevant the AI responses are to the user queries',
+            lastUpdated: evaluationData.timestamp || new Date().toISOString()
+          },
+          {
+            id: 'accuracy',
+            name: 'Accuracy',
+            score: evaluationData.metrics.metrics_by_type?.accuracy?.average || 0,
+            threshold: 0.8,
+            status: (evaluationData.metrics.metrics_by_type?.accuracy?.average || 0) >= 0.8 ? 'pass' : 'warning',
+            description: 'Measures the factual correctness of AI responses',
+            lastUpdated: evaluationData.timestamp || new Date().toISOString()
+          },
+          {
+            id: 'completeness',
+            name: 'Completeness',
+            score: evaluationData.metrics.metrics_by_type?.completeness?.average || 0,
+            threshold: 0.8,
+            status: (evaluationData.metrics.metrics_by_type?.completeness?.average || 0) >= 0.8 ? 'pass' : 'warning',
+            description: 'Measures how comprehensive and complete the AI responses are',
+            lastUpdated: evaluationData.timestamp || new Date().toISOString()
+          },
+          {
+            id: 'coherence',
+            name: 'Coherence',
+            score: evaluationData.metrics.metrics_by_type?.coherence?.average || 0,
+            threshold: 0.8,
+            status: (evaluationData.metrics.metrics_by_type?.coherence?.average || 0) >= 0.8 ? 'pass' : 'warning',
+            description: 'Measures how logical and well-structured the AI responses are',
+            lastUpdated: evaluationData.timestamp || new Date().toISOString()
+          }
+        ] : [];
+        setEvaluationMetrics(metricsArray);
+      }      if (tracesResponse.ok) {
         const tracesData = await tracesResponse.json();
-        setTraces(tracesData);
-      }
-
-      if (systemResponse.ok) {
+        // Transform traces data to match expected interface
+        const transformedTraces: TraceData[] = tracesData.traces?.map((trace: any) => ({
+          traceId: trace.trace_id || trace.traceId || '',
+          operation: trace.operation_name || trace.operation || '',
+          duration: trace.duration_ms || trace.duration || 0,
+          status: trace.status || 'success',
+          timestamp: trace.start_time || trace.timestamp || new Date().toISOString(),
+          spans: 1, // Default to 1 span if not provided
+          model: trace.tags?.model || trace.model,
+          userId: trace.tags?.session_id || trace.userId
+        })) || [];
+        setTraces(transformedTraces);
+      }      if (systemResponse.ok) {
         const systemData = await systemResponse.json();
-        setSystemMetrics(systemData);
+        // Transform system metrics to match expected interface
+        const transformedSystemMetrics: MetricData[] = systemData.metrics ? [
+          {
+            timestamp: systemData.timestamp,
+            value: systemData.metrics.cpu?.usage_percent || 0,
+            label: 'CPU Usage %'
+          },
+          {
+            timestamp: systemData.timestamp,
+            value: systemData.metrics.memory?.usage_percent || 0,
+            label: 'Memory Usage %'
+          },
+          {
+            timestamp: systemData.timestamp,
+            value: systemData.metrics.disk?.usage_percent || 0,
+            label: 'Disk Usage %'
+          }
+        ] : [];
+        setSystemMetrics(transformedSystemMetrics);
       }
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -118,7 +200,7 @@ export const AdminDashboard: React.FC = () => {
 
   const fetchEvaluationFrameworkConfig = async () => {
     try {
-      const response = await fetch('/api/admin/evaluation-framework-config');
+      const response = await fetch('/api/v1/admin/evaluation-framework-config');
       if (response.ok) {
         const config = await response.json();
         setEvaluationFramework(config.framework_type || 'custom');
@@ -131,7 +213,7 @@ export const AdminDashboard: React.FC = () => {
   const updateEvaluationFramework = async (framework: 'custom' | 'azure_ai_foundry' | 'hybrid') => {
     try {
       setIsUpdatingFramework(true);
-      const response = await fetch('/api/admin/evaluation-framework-config', {
+      const response = await fetch('/api/v1/admin/evaluation-framework-config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -180,6 +262,47 @@ export const AdminDashboard: React.FC = () => {
       console.error('Error fetching foundry data:', error);
     } finally {
       setIsLoadingFoundryData(false);
+    }
+  };
+
+  const fetchTokenAnalytics = async () => {
+    try {
+      const days = parseInt(tokenTimeRange);
+        const [analyticsResponse, trendsResponse, deploymentsResponse, servicesResponse, costsResponse] = await Promise.all([
+        fetch(`/api/v1/admin/token-usage/analytics?days=${days}`),
+        fetch(`/api/v1/admin/token-usage/trends?days=${days}&granularity=daily`),
+        fetch(`/api/v1/admin/token-usage/deployments?days=${days}`),
+        fetch(`/api/v1/admin/token-usage/services?days=${days}`),
+        fetch(`/api/v1/admin/token-usage/costs?days=${days}`)
+      ]);
+
+      if (analyticsResponse.ok) {
+        const analyticsData = await analyticsResponse.json();
+        setTokenAnalytics(analyticsData.analytics);
+      }
+
+      if (trendsResponse.ok) {
+        const trendsData = await trendsResponse.json();
+        setTokenTrends(trendsData.trends);
+      }
+
+      if (deploymentsResponse.ok) {
+        const deploymentsData = await deploymentsResponse.json();
+        setDeploymentUsage(deploymentsData.deployment_usage.deployments);
+      }
+
+      if (servicesResponse.ok) {
+        const servicesData = await servicesResponse.json();
+        setServiceUsage(servicesData.service_usage.services);
+      }
+
+      if (costsResponse.ok) {
+        const costsData = await costsResponse.json();
+        setCostAnalytics(costsData.costs);
+      }
+      
+    } catch (error) {
+      console.error('Error fetching token analytics:', error);
     }
   };
 
@@ -306,84 +429,247 @@ export const AdminDashboard: React.FC = () => {
           <TabsTrigger value="foundry">Azure AI Foundry</TabsTrigger>
           <TabsTrigger value="tracing">Distributed Tracing</TabsTrigger>
           <TabsTrigger value="system">System Metrics</TabsTrigger>
-        </TabsList>
+        </TabsList>        <TabsContent value="token-usage" className="space-y-4">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-semibold">Token Usage Analytics</h3>
+              <p className="text-sm text-muted-foreground">Comprehensive token usage and cost analysis</p>
+            </div>
+            <Select value={tokenTimeRange} onValueChange={setTokenTimeRange}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">Last 24 hours</SelectItem>
+                <SelectItem value="7">Last 7 days</SelectItem>
+                <SelectItem value="30">Last 30 days</SelectItem>
+                <SelectItem value="90">Last 90 days</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-        <TabsContent value="token-usage" className="space-y-4">
+          {/* Summary Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Total Requests</p>
+                    <p className="text-2xl font-bold">
+                      {tokenAnalytics?.total_requests?.toLocaleString() || '0'}
+                    </p>
+                  </div>
+                  <Activity className="h-8 w-8 text-blue-500" />
+                </div>
+              </CardContent>
+            </Card>
+            
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Total Tokens</p>
+                    <p className="text-2xl font-bold">
+                      {tokenAnalytics?.total_tokens?.toLocaleString() || '0'}
+                    </p>
+                  </div>
+                  <Zap className="h-8 w-8 text-yellow-500" />
+                </div>
+              </CardContent>
+            </Card>            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Total Cost</p>
+                    <p className="text-2xl font-bold">
+                      ${(costAnalytics?.total_cost || tokenAnalytics?.total_cost || 0).toFixed(2)}
+                    </p>
+                  </div>
+                  <DollarSign className="h-8 w-8 text-green-500" />
+                </div>
+                {costAnalytics && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    ${(costAnalytics.cost_per_token || 0).toFixed(6)} per token
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Avg Tokens/Request</p>
+                    <p className="text-2xl font-bold">
+                      {Math.round(tokenAnalytics?.average_tokens_per_request || 0)}
+                    </p>
+                  </div>
+                  <BarChart3 className="h-8 w-8 text-purple-500" />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Charts */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
               <CardHeader>
-                <CardTitle>Token Usage by Model</CardTitle>
-                <CardDescription>Breakdown of token consumption across different models</CardDescription>
+                <CardTitle>Token Usage Trends</CardTitle>
+                <CardDescription>Daily token consumption over time</CardDescription>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={tokenUsage}>
+                  <AreaChart data={tokenTrends}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="model" />
+                    <XAxis dataKey="date" />
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Bar dataKey="inputTokens" stackId="a" fill="#8884d8" name="Input Tokens" />
-                    <Bar dataKey="outputTokens" stackId="a" fill="#82ca9d" name="Output Tokens" />
-                  </BarChart>
+                    <Area 
+                      type="monotone" 
+                      dataKey="tokens" 
+                      stroke="#8884d8" 
+                      fill="#8884d8" 
+                      fillOpacity={0.6}
+                      name="Tokens"
+                    />
+                  </AreaChart>
                 </ResponsiveContainer>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader>
-                <CardTitle>Cost Distribution</CardTitle>
-                <CardDescription>Cost breakdown by model</CardDescription>
+                <CardTitle>Cost Trends</CardTitle>
+                <CardDescription>Daily cost over time</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={tokenTrends}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip formatter={(value) => [`$${Number(value).toFixed(2)}`, 'Cost']} />
+                    <Legend />
+                    <Line 
+                      type="monotone" 
+                      dataKey="cost" 
+                      stroke="#82ca9d" 
+                      strokeWidth={2}
+                      name="Cost ($)"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Usage by Service</CardTitle>
+                <CardDescription>Token consumption by service type</CardDescription>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
                     <Pie
-                      data={tokenUsage}
+                      data={serviceUsage}
                       cx="50%"
                       cy="50%"
                       labelLine={false}
-                      label={({ model, cost }) => `${model}: $${cost.toFixed(2)}`}
+                      label={({ service_type, percentage }) => `${service_type}: ${percentage}%`}
                       outerRadius={80}
                       fill="#8884d8"
-                      dataKey="cost"
+                      dataKey="tokens"
                     >
-                      {tokenUsage.map((_entry, index) => (
+                      {serviceUsage.map((_entry, index) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip />
+                    <Tooltip formatter={(value) => [Number(value).toLocaleString(), 'Tokens']} />
                   </PieChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Usage by Deployment</CardTitle>
+                <CardDescription>Token consumption by model deployment</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={deploymentUsage.slice(0, 8)} layout="horizontal">
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis type="number" />
+                    <YAxis dataKey="deployment_name" type="category" width={80} />
+                    <Tooltip formatter={(value) => [Number(value).toLocaleString(), 'Tokens']} />
+                    <Bar dataKey="tokens" fill="#8884d8" />
+                  </BarChart>
                 </ResponsiveContainer>
               </CardContent>
             </Card>
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Detailed Token Usage</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {tokenUsage.map((usage, index) => (
-                  <div key={index} className="flex items-center justify-between p-4 border rounded-lg">
-                    <div className="space-y-1">
-                      <div className="font-medium">{usage.model}</div>
-                      <div className="text-sm text-muted-foreground">
-                        {usage.requests} requests • {usage.totalTokens.toLocaleString()} tokens
+          {/* Detailed Tables */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Top Deployments</CardTitle>
+                <CardDescription>Most active model deployments</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-80">
+                  <div className="space-y-3">
+                    {deploymentUsage.slice(0, 10).map((deployment, index) => (
+                      <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div className="space-y-1">
+                          <div className="font-medium">{deployment.deployment_name}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {deployment.requests} requests • {deployment.percentage}% of total
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-medium">${deployment.cost.toFixed(2)}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {deployment.tokens.toLocaleString()} tokens
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-medium">${usage.cost.toFixed(2)}</div>
-                      <div className="text-sm text-muted-foreground">
-                        {usage.inputTokens.toLocaleString()} in • {usage.outputTokens.toLocaleString()} out
-                      </div>
-                    </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Service Breakdown</CardTitle>
+                <CardDescription>Usage statistics by service type</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-80">
+                  <div className="space-y-3">
+                    {serviceUsage.map((service, index) => (
+                      <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div className="space-y-1">
+                          <div className="font-medium">{service.service_type}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {service.requests} requests • {service.percentage}% of total
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-medium">${service.cost.toFixed(2)}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {service.tokens.toLocaleString()} tokens
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="evaluation" className="space-y-4">
@@ -549,8 +835,7 @@ export const AdminDashboard: React.FC = () => {
                     {isLoadingFoundryData ? (
                       <div className="text-center text-muted-foreground">Loading models...</div>
                     ) : foundryModels.length === 0 ? (
-                      <div className="text-center text-muted-foreground">No models found</div>
-                    ) : (
+                      <div className="text-center text-muted-foreground">No models found</div>                    ) : (
                       foundryModels.map((model, index) => (
                         <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
                           <div className="space-y-1">
@@ -581,8 +866,7 @@ export const AdminDashboard: React.FC = () => {
                     {isLoadingFoundryData ? (
                       <div className="text-center text-muted-foreground">Loading connections...</div>
                     ) : foundryConnections.length === 0 ? (
-                      <div className="text-center text-muted-foreground">No connections found</div>
-                    ) : (
+                      <div className="text-center text-muted-foreground">No connections found</div>                    ) : (
                       foundryConnections.map((connection, index) => (
                         <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
                           <div className="space-y-1">

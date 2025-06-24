@@ -42,7 +42,8 @@ async def lifespan(app: FastAPI):
     
     # Initialize Azure AI Foundry tracing
     logger.info("🔍 Setting up Azure AI Foundry tracing...")
-    tracing_success = setup_ai_foundry_tracing()
+    #tracing_success = setup_ai_foundry_tracing()
+    tracing_success = False
     if tracing_success:
         logger.info("✅ Azure AI Foundry tracing enabled - traces will be visible in AI Foundry portal")
     else:
@@ -76,14 +77,14 @@ async def lifespan(app: FastAPI):
             logger.error(f"Error during cleanup: {e}")
 
 application = FastAPI(
-    title="RAG Financial POC - Adaptive Knowledge Base",
-    description="Exercise 3: Adaptive Knowledge Base Management for Financial Documents with comprehensive observability",
+    title="RAG Financial Adaptive Knowledge Base",
+    description="Adaptive Knowledge Base Management for Financial Documents with comprehensive observability",
     version="1.0.0",
     lifespan=lifespan
 )
 
 setup_fastapi_instrumentation(application)
-setup_ai_foundry_tracing(application)
+#setup_ai_foundry_tracing(application)
 
 application.add_middleware(
     CORSMiddleware,

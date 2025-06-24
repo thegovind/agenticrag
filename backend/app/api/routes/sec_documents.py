@@ -168,20 +168,35 @@ async def process_sec_document(
     Retrieve and process a SEC document for the knowledge base
     """
     try:
-        # async with observability.trace_operation("sec_process_document") as span:
-        #     span.set_attribute("ticker", request.ticker)
-        #     span.set_attribute("accession_number", request.accession_number)
-        
-        result = await sec_service.retrieve_and_process_document(
-            ticker=request.ticker,
-            accession_number=request.accession_number,
-            document_id=request.document_id
+        # Initialize token tracking for this request
+        from app.services.token_usage_tracker import TokenUsageTracker
+        token_tracker = TokenUsageTracker()
+        tracking_id = await token_tracker.start_tracking(
+            operation_type="sec_document_processing",
+            user_id="system",  # SEC processing is typically a system operation
+            metadata={
+                "ticker": request.ticker,
+                "accession_number": request.accession_number,
+                "document_id": request.document_id
+            }
         )
         
-        #     span.set_attribute("chunks_created", result["chunks_created"])
-        #     span.set_attribute("success", True)
-        
-        return ProcessDocumentResponse(**result)
+        try:
+            result = await sec_service.retrieve_and_process_document(
+                ticker=request.ticker,
+                accession_number=request.accession_number,
+                document_id=request.document_id,
+                token_tracker=token_tracker,
+                tracking_id=tracking_id
+            )
+            
+            # Finalize tracking
+            await token_tracker.finalize_tracking(tracking_id)
+            
+            return ProcessDocumentResponse(**result)
+        except Exception as e:
+            await token_tracker.finalize_tracking(tracking_id, error=str(e))
+            raise
             
     except Exception as e:
         logger.error(f"Error processing SEC document: {e}")
@@ -206,11 +221,35 @@ async def process_multiple_sec_documents(
         
         for filing_request in request.filings:
             try:
-                result = await sec_service.retrieve_and_process_document(
-                    ticker=filing_request.ticker,
-                    accession_number=filing_request.accession_number,
-                    document_id=filing_request.document_id
+                # Initialize token tracking for each document
+                from app.services.token_usage_tracker import TokenUsageTracker
+                token_tracker = TokenUsageTracker()
+                tracking_id = await token_tracker.start_tracking(
+                    operation_type="sec_document_processing_batch",
+                    user_id="system",
+                    metadata={
+                        "ticker": filing_request.ticker,
+                        "accession_number": filing_request.accession_number,
+                        "document_id": filing_request.document_id,
+                        "batch_processing": True
+                    }
                 )
+                
+                try:
+                    result = await sec_service.retrieve_and_process_document(
+                        ticker=filing_request.ticker,
+                        accession_number=filing_request.accession_number,
+                        document_id=filing_request.document_id,
+                        token_tracker=token_tracker,
+                        tracking_id=tracking_id
+                    )
+                    
+                    # Finalize tracking
+                    await token_tracker.finalize_tracking(tracking_id)
+                    
+                except Exception as doc_error:
+                    await token_tracker.finalize_tracking(tracking_id, error=str(doc_error))
+                    raise doc_error
                 
                 result_response = ProcessDocumentResponse(**result)
                 results.append(result_response)

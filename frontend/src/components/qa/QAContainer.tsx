@@ -397,7 +397,10 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                       ✕ Close
                     </button>
                   </div>
-                  <AgentServiceStatus onRefresh={handleRefreshAgentStatus} />
+                  <AgentServiceStatus 
+                    onRefresh={handleRefreshAgentStatus} 
+                    isVisible={showAgentStatus}
+                  />
                 </div>
               )}
             </ResizablePanel>

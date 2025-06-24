@@ -48,6 +48,19 @@ except ImportError:
 
 def setup_observability():
     """Setup Azure Monitor observability with OpenTelemetry and Azure AI Foundry tracing"""
+    from app.core.config import settings
+    
+    # Check if telemetry is enabled
+    if not settings.enable_telemetry:
+        logging.info("Telemetry is disabled via ENABLE_TELEMETRY setting. Skipping Application Insights setup.")
+        # Return basic tracer and meter without Azure Monitor
+        if OPENTELEMETRY_AVAILABLE:
+            tracer = trace.get_tracer(__name__)
+            meter = metrics.get_meter(__name__)
+        else:
+            tracer = None
+            meter = None
+        return tracer, meter
     
     connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
     azure_monitor_connection_string = os.getenv("AZURE_MONITOR_CONNECTION_STRING")
@@ -120,33 +133,45 @@ def setup_observability():
 
 class ObservabilityManager:
     def __init__(self):
+        from app.core.config import settings
+        
+        self.telemetry_enabled = settings.enable_telemetry
         self.tracer, self.meter = setup_observability()
         
-        self.request_counter = self.meter.create_counter(
-            "rag_requests_total",
-            description="Total number of RAG requests"
-        )
-        self.token_counter = self.meter.create_counter(
-            "token_usage_total",
-            description="Total token usage"
-        )
-        self.kb_update_counter = self.meter.create_counter(
-            "knowledge_base_updates_total", 
-            description="Knowledge base updates"
-        )
-        self.error_counter = self.meter.create_counter(
-            "rag_errors_total",
-            description="Total number of errors"
-        )
-        
-        self.response_time_histogram = self.meter.create_histogram(
-            "rag_response_time_seconds",
-            description="Response time in seconds"
-        )
-        self.evaluation_time_histogram = self.meter.create_histogram(
-            "evaluation_time_seconds", 
-            description="Evaluation time in seconds"
-        )
+        if self.telemetry_enabled and self.meter:
+            self.request_counter = self.meter.create_counter(
+                "rag_requests_total",
+                description="Total number of RAG requests"
+            )
+            self.token_counter = self.meter.create_counter(
+                "token_usage_total",
+                description="Total token usage"
+            )
+            self.kb_update_counter = self.meter.create_counter(
+                "knowledge_base_updates_total", 
+                description="Knowledge base updates"
+            )
+            self.error_counter = self.meter.create_counter(
+                "rag_errors_total",
+                description="Total number of errors"
+            )
+            
+            self.response_time_histogram = self.meter.create_histogram(
+                "rag_response_time_seconds",
+                description="Response time in seconds"
+            )
+            self.evaluation_time_histogram = self.meter.create_histogram(
+                "evaluation_time_seconds", 
+                description="Evaluation time in seconds"
+            )
+        else:
+            # Create null objects when telemetry is disabled
+            self.request_counter = None
+            self.token_counter = None
+            self.kb_update_counter = None
+            self.error_counter = None
+            self.response_time_histogram = None
+            self.evaluation_time_histogram = None
         
         self.active_sessions_gauge = self.meter.create_up_down_counter(
             "active_sessions_current",
@@ -176,6 +201,9 @@ class ObservabilityManager:
         
     def track_request(self, endpoint: str, user_id: str = None, session_id: str = None):
         """Track API request with enhanced metadata"""
+        if not self.telemetry_enabled or not self.request_counter:
+            return
+            
         attributes = {"endpoint": endpoint}
         if user_id:
             attributes["user_id"] = user_id
@@ -194,6 +222,9 @@ class ObservabilityManager:
     def track_tokens(self, model: str, prompt_tokens: int, completion_tokens: int, 
                     session_id: str = None, cost: float = None):
         """Track token usage with cost calculation"""
+        if not self.telemetry_enabled or not self.token_counter:
+            return
+            
         self.token_counter.add(prompt_tokens, {"model": model, "type": "prompt"})
         self.token_counter.add(completion_tokens, {"model": model, "type": "completion"})
         
@@ -210,6 +241,9 @@ class ObservabilityManager:
         
     def track_response_time(self, endpoint: str, duration: float, model: str = None, session_id: str = None):
         """Track response time"""
+        if not self.telemetry_enabled or not self.response_time_histogram:
+            return
+            
         attributes = {"endpoint": endpoint}
         if model:
             attributes["model"] = model
@@ -254,6 +288,9 @@ class ObservabilityManager:
     def track_error(self, error_type: str, endpoint: str, error_message: str, 
                    session_id: str = None, user_id: str = None):
         """Track errors"""
+        if not self.telemetry_enabled or not self.error_counter:
+            return
+            
         attributes = {
             "error_type": error_type,
             "endpoint": endpoint
@@ -276,6 +313,9 @@ class ObservabilityManager:
         
     def track_kb_update(self, source: str, documents_added: int, documents_updated: int):
         """Track knowledge base updates"""
+        if not self.telemetry_enabled or not self.kb_update_counter:
+            return
+            
         self.kb_update_counter.add(documents_added, {"source": source, "type": "added"})
         self.kb_update_counter.add(documents_updated, {"source": source, "type": "updated"})
         

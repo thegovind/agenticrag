@@ -129,10 +129,16 @@ class ContentGeneratorAgent(FinancialAgent):
         tone = request.get("tone", "professional")
         max_length = request.get("max_length", 2000)
         
+        # Extract token tracking context if available
+        token_tracker = context.get('token_tracker')
+        tracking_id = context.get('tracking_id')
+        
         relevant_chunks = await self.kb_manager.search_knowledge_base(
             query=prompt,
             top_k=10,
-            filters={"document_type": ["10-K", "10-Q"]}
+            filters={"document_type": ["10-K", "10-Q"]},
+            token_tracker=token_tracker,
+            tracking_id=tracking_id
         )
         
         knowledge_context = "\n\n".join([
@@ -181,17 +187,22 @@ class ContentGeneratorAgent(FinancialAgent):
             "citations": citations,
             "confidence_score": self._calculate_content_confidence(relevant_chunks),
             "sources_used": len(relevant_chunks),
-            "success": True
-        }
+            "success": True        }
     
     async def _enhance_content_with_citations(self, request: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Enhance content with proper citations"""
         content = request["content"]
         citation_style = request.get("citation_style", "apa")
         
+        # Extract token tracking context if available
+        token_tracker = context.get('token_tracker')
+        tracking_id = context.get('tracking_id')
+        
         relevant_chunks = await self.kb_manager.search_knowledge_base(
             query=content[:500],  # Use first 500 chars as query
-            top_k=5
+            top_k=5,
+            token_tracker=token_tracker,
+            tracking_id=tracking_id
         )
         
         enhancement_prompt = f"""
@@ -354,6 +365,10 @@ class QAAgent(FinancialAgent):
         question = request["question"]
         verification_level = request.get("verification_level", "thorough")
         
+        # Extract token tracking context if available
+        token_tracker = context.get('token_tracker')
+        tracking_id = context.get('tracking_id')
+        
         try:
             # with observability.trace_operation("qa_agent_answer_question") as span:
             # span.set_attribute("question", question[:100])
@@ -362,14 +377,15 @@ class QAAgent(FinancialAgent):
                 await self._ensure_qa_agent_initialized()
                 
                 sub_questions = await self._decompose_question_internal(question)
-                
-                # Search knowledge base for relevant information
+                  # Search knowledge base for relevant information
                 all_chunks = []
                 for sub_q in sub_questions:
                     chunks = await self.kb_manager.search_knowledge_base(
                         query=sub_q,
                         top_k=5,
-                        filters={"document_type": ["10-K", "10-Q", "8-K"]}
+                        filters={"document_type": ["10-K", "10-Q", "8-K"]},
+                        token_tracker=token_tracker,
+                        tracking_id=tracking_id
                     )
                     all_chunks.extend(chunks)
                 

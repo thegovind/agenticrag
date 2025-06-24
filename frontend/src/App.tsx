@@ -105,7 +105,7 @@ const AppContent = () => {
           </TabsContent>
           
           <TabsContent value="admin" className="m-0 bg-background">
-            <AdminDashboard />
+            <AdminDashboard isActive={activeTab === 'admin'} />
           </TabsContent>
         </Tabs>
       </main>

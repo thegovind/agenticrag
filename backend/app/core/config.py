@@ -30,13 +30,13 @@ class Settings(BaseSettings):
         "gpt-35-turbo",
         "financial-llm",  # Industry specific
         "grok-beta",
-        "deepseek-chat"
-    ]
+        "deepseek-chat"    ]
     
     AZURE_COSMOS_ENDPOINT: str = os.getenv("AZURE_COSMOS_ENDPOINT", "")
     AZURE_COSMOS_DATABASE_NAME: str = os.getenv("AZURE_COSMOS_DATABASE_NAME", "rag-financial-db")
     AZURE_COSMOS_CONTAINER_NAME: str = os.getenv("AZURE_COSMOS_CONTAINER_NAME", "chat-sessions")
     AZURE_COSMOS_EVALUATION_CONTAINER_NAME: str = os.getenv("AZURE_COSMOS_EVALUATION_CONTAINER_NAME", "evaluation-results")
+    AZURE_COSMOS_TOKEN_USAGE_CONTAINER_NAME: str = os.getenv("AZURE_COSMOS_TOKEN_USAGE_CONTAINER_NAME", "token-usage")
     
     AZURE_FORM_RECOGNIZER_ENDPOINT: str = os.getenv("AZURE_FORM_RECOGNIZER_ENDPOINT", "")
     
@@ -44,9 +44,10 @@ class Settings(BaseSettings):
     AZURE_AI_FOUNDRY_RESOURCE_GROUP: str = os.getenv("AZURE_AI_FOUNDRY_RESOURCE_GROUP", "")
     AZURE_SUBSCRIPTION_ID: str = os.getenv("AZURE_SUBSCRIPTION_ID", "")
     AZURE_AI_FOUNDRY_WORKSPACE_NAME: str = os.getenv("AZURE_AI_FOUNDRY_WORKSPACE_NAME", "")
-    AZURE_AI_PROJECT_ENDPOINT: str = os.getenv("AZURE_AI_PROJECT_ENDPOINT", "")
+    AZURE_AI_PROJECT_ENDPOINT: str = os.getenv("AZURE_AI_PROJECT_ENDPOINT", "")    # Azure Monitor and Application Insights Configuration
     azure_monitor_connection_string: str = os.getenv("AZURE_MONITOR_CONNECTION_STRING", "")
     azure_key_vault_url: str = os.getenv("AZURE_KEY_VAULT_URL", "")
+    enable_telemetry: bool = os.getenv("ENABLE_TELEMETRY", "false").lower() == "true"
     
     mcp_enabled: bool = os.getenv("MCP_ENABLED", "true").lower() == "true"
     mcp_server_port: int = int(os.getenv("MCP_SERVER_PORT", "3001"))

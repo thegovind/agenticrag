@@ -13,9 +13,13 @@ interface AgentCapability {
 
 interface AgentServiceStatusProps {
   onRefresh?: () => void;
+  isVisible?: boolean;
 }
 
-export const AgentServiceStatus: React.FC<AgentServiceStatusProps> = ({ onRefresh }) => {
+export const AgentServiceStatus: React.FC<AgentServiceStatusProps> = ({ 
+  onRefresh,
+  isVisible = true 
+}) => {
   const [serviceStatus, setServiceStatus] = useState<'connected' | 'disconnected' | 'loading'>('loading');
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
   const [agentMetrics, setAgentMetrics] = useState({
@@ -78,10 +82,16 @@ export const AgentServiceStatus: React.FC<AgentServiceStatusProps> = ({ onRefres
   };
 
   useEffect(() => {
+    if (!isVisible) return;
+    
     fetchAgentStatus();
-    const interval = setInterval(fetchAgentStatus, 30000); // Refresh every 30 seconds
+    const interval = setInterval(() => {
+      if (isVisible) {
+        fetchAgentStatus();
+      }
+    }, 60000); // Refresh every 60 seconds only when visible
     return () => clearInterval(interval);
-  }, []);
+  }, [isVisible]);
 
   const handleRefresh = () => {
     fetchAgentStatus();

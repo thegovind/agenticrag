@@ -289,22 +289,41 @@ async def search_knowledge_base(
         if not azure_manager:
             raise HTTPException(status_code=500, detail="Azure services not initialized")
         
-        # Perform hybrid search in Azure Search
-        results = await azure_manager.hybrid_search(
-            query=query,
-            top_k=limit,
-            min_score=min_score
+        # Initialize token tracking for this request
+        from app.services.token_usage_tracker import TokenUsageTracker
+        token_tracker = TokenUsageTracker()
+        tracking_id = await token_tracker.start_tracking(
+            operation_type="knowledge_base_search",
+            user_id=request.headers.get("X-User-ID", "anonymous"),
+            metadata={"query": query, "limit": limit}
         )
         
-        # Filter by document type if provided
-        if document_type:
-            results = [r for r in results if r.get('document_type') == document_type]
-        
-        return {
-            "query": query,
-            "results": results,
-            "total_count": len(results)
-        }
+        try:
+            # Perform hybrid search in Azure Search
+            results = await azure_manager.hybrid_search(
+                query=query,
+                top_k=limit,
+                min_score=min_score,
+                token_tracker=token_tracker,
+                tracking_id=tracking_id
+            )
+            
+            # Filter by document type if provided
+            if document_type:
+                results = [r for r in results if r.get('document_type') == document_type]
+            
+            # Finalize tracking
+            await token_tracker.finalize_tracking(tracking_id)
+            
+            return {
+                "query": query,
+                "results": results,
+                "total_count": len(results)
+            }
+        except Exception as e:
+            await token_tracker.finalize_tracking(tracking_id, error=str(e))
+            raise
+            
     except Exception as e:
         logger.error(f"Error searching knowledge base: {e}")
         raise HTTPException(status_code=500, detail="Failed to search knowledge base")

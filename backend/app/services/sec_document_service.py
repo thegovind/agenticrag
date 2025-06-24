@@ -319,8 +319,7 @@ class SECDocumentService:
                     period_end_date=getattr(filing, 'period_end_date', None),
                     document_url=getattr(filing, 'document_url', ''),
                     accession_number=filing.accession_number,
-                    file_size=getattr(filing, 'size', None)
-                )
+                    file_size=getattr(filing, 'size', None)                )
                 documents.append(doc_info)
             
             logger.info(f"Found {len(documents)} filings for {ticker}")
@@ -333,7 +332,9 @@ class SECDocumentService:
         self, 
         ticker: str, 
         accession_number: str,
-        document_id: Optional[str] = None    ) -> Dict[str, Any]:
+        document_id: Optional[str] = None,
+        token_tracker=None,
+        tracking_id=None) -> Dict[str, Any]:
         """
         Retrieve SEC document and process it into chunks using md2chunks
         """
@@ -401,9 +402,8 @@ class SECDocumentService:
             chunks = await self._process_content_with_md2chunks(
                 content, document_id, metadata
             )
-            
-            # Generate embeddings for chunks
-            await self._generate_embeddings_for_chunks(chunks)
+              # Generate embeddings for chunks
+            await self._generate_embeddings_for_chunks(chunks, token_tracker, tracking_id)
             
             # Store in Azure Search
             search_documents = await self._prepare_search_documents(chunks)
@@ -654,11 +654,11 @@ class SECDocumentService:
             if re.search(pattern, check_content):
                 logger.debug(f"Detected financial section: {section_type}")
                 return {"section_type": section_type}
-        
-        # If no specific pattern matches, return general
+          # If no specific pattern matches, return general
         return {"section_type": "general"}
     
-    async def _generate_embeddings_for_chunks(self, chunks: List[DocumentChunk]):
+    async def _generate_embeddings_for_chunks(self, chunks: List[DocumentChunk], 
+                                             token_tracker=None, tracking_id=None):
         """
         Generate embeddings for document chunks
         """
@@ -666,7 +666,11 @@ class SECDocumentService:
             logger.info(f"Generating embeddings for {len(chunks)} chunks")
             for i, chunk in enumerate(chunks):
                 try:
-                    embedding = await self.azure_manager.get_embedding(chunk.content)
+                    embedding = await self.azure_manager.get_embedding(
+                        chunk.content, 
+                        token_tracker=token_tracker, 
+                        tracking_id=tracking_id
+                    )
                     chunk.embedding = embedding
                     logger.info(f"Generated embedding for chunk {i+1}/{len(chunks)}")
                 except Exception as e:

@@ -417,13 +417,43 @@ class AzureAIAgentService:
                     from app.services.knowledge_base_manager import AdaptiveKnowledgeBaseManager
                     azure_manager = AzureServiceManager()
                     await azure_manager.initialize()
-                    kb_manager = AdaptiveKnowledgeBaseManager(azure_manager)                # Search for relevant documents with verification level-specific parameters
+                    kb_manager = AdaptiveKnowledgeBaseManager(azure_manager)
+                  # Extract token tracking context for logging and usage
+                token_tracker = context.get('token_tracker')
+                tracking_id = context.get('tracking_id')
+                embedding_tracking_id = context.get('embedding_tracking_id')  # Separate tracking for embeddings
+                
+                # Use embedding tracking ID for search operations (which involve embedding generation)
+                search_tracking_id = embedding_tracking_id if embedding_tracking_id else tracking_id
+                
+                # Search for relevant documents with verification level-specific parameters
+                logger.info(f"🔍 Searching knowledge base with token tracking: tracker={token_tracker is not None}, tracking_id={search_tracking_id}")
                 search_results = await kb_manager.search_knowledge_base(
                     query=question,
                     top_k=search_config["top_k"],
                     filters=context.get('filters'),
-                    chat_model=self._extract_deployment_name(model_config.get('chat_model'))
+                    chat_model=self._extract_deployment_name(model_config.get('chat_model')),
+                    token_tracker=token_tracker,
+                    tracking_id=search_tracking_id  # Use embedding-specific tracking ID
                 )
+                
+                # Finalize embedding tracking after search operations complete
+                if embedding_tracking_id and token_tracker:
+                    try:
+                        await token_tracker.finalize_tracking(
+                            tracking_id=embedding_tracking_id,
+                            success=True,
+                            http_status_code=200,
+                            metadata={
+                                "operation": "embedding_search",
+                                "search_results_count": len(search_results),
+                                "query_length": len(question),
+                                "verification_level": verification_level
+                            }
+                        )
+                        logger.info(f"✅ Finalized embedding token tracking for session {embedding_tracking_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to finalize embedding token tracking: {e}")
                 
                 logger.info(f"Retrieved {len(search_results)} relevant documents from vector store (requested: {search_config['top_k']} for {verification_level})")
                 

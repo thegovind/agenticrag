@@ -17,6 +17,7 @@ from app.core.observability import observability
 # from app.core.evaluation import get_evaluation_framework
 from app.services.azure_services import AzureServiceManager
 from app.services.azure_ai_agent_service import AzureAIAgentService
+from app.services.token_usage_tracker import TokenUsageTracker, ServiceType, OperationType
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,6 +31,22 @@ async def chat(
     """Main chat endpoint for RAG conversations with comprehensive evaluation"""
     start_time = time.time()
     session_id = x_session_id or request.session_id or str(uuid.uuid4())
+    
+    # Initialize token usage tracker
+    token_tracker = TokenUsageTracker()
+    await token_tracker.initialize()
+    
+    # Start tracking the main chat operation
+    tracking_id = token_tracker.start_tracking(
+        session_id=session_id,
+        service_type=ServiceType.CHAT_SERVICE,
+        operation_type=OperationType.CHAT_COMPLETION,
+        endpoint="/chat",
+        user_id=x_user_id,
+        request_text=request.message,
+        temperature=request.temperature,
+        exercise_type=request.exercise_type.value if request.exercise_type else None
+    )
     
     try:
         async with observability.trace_operation(
@@ -132,6 +149,29 @@ The system is configured to use {request.chat_model} for generation and {request
                 "completion_tokens": int(completion_tokens),
                 "total_tokens": total_tokens
             }
+            
+            # Extract deployment name from request (handle combined strings like "gpt-4o (chat4o)")
+            def extract_deployment_name(model_value: str) -> str:
+                if not model_value:
+                    return "unknown"
+                if '(' in model_value and ')' in model_value:
+                    try:
+                        return model_value.split('(')[1].split(')')[0].strip()
+                    except (IndexError, AttributeError):
+                        return model_value
+                return model_value
+            
+            chat_deployment_used = extract_deployment_name(request.chat_model)
+            
+            # Update token tracking with actual usage
+            await token_tracker.update_usage(
+                tracking_id=tracking_id,
+                model_name=request.chat_model,
+                deployment_name=chat_deployment_used,
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                response_text=response_text
+            )
             
             observability.track_tokens(
                 model=request.chat_model,
@@ -246,9 +286,32 @@ The system is configured to use {request.chat_model} for generation and {request
             span.set_attribute("response.citations", len(citations))
             span.set_attribute("response.length", len(response_text))
             
+            # Finalize token tracking 
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "citations_count": len(citations),
+                    "exercise_type": request.exercise_type.value if request.exercise_type else None,
+                    "response_length": len(response_text)
+                }
+            )
+            
             return response
         
     except Exception as e:
+        # Finalize token tracking with error
+        try:
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=False,
+                http_status_code=500,
+                error_message=str(e)
+            )
+        except Exception as tracker_error:
+            logger.warning(f"Failed to finalize token tracking: {tracker_error}")
+            
         observability.track_error(
             error_type=type(e).__name__,
             endpoint="/api/v1/chat",
