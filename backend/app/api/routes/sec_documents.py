@@ -2,10 +2,21 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 import logging
+import asyncio
+import time
+from datetime import datetime, timedelta
 
 from app.services.sec_document_service import SECDocumentService, SECDocumentInfo
 from app.services.azure_services import AzureServiceManager
+from app.services.token_usage_tracker import TokenUsageTracker, ServiceType, OperationType
 from app.core.observability import observability
+from app.models.schemas import (
+    ProcessDocumentRequest, ProcessDocumentResponse, 
+    ProcessMultipleDocumentsRequest, ProcessMultipleDocumentsResponse,
+    SECFilingsRequest, SECDocumentLibraryResponse, SECAnalyticsResponse,
+    ChunkVisualizationResponse, DocumentProcessingProgress, ProcessingStage,
+    BatchProcessingStatus
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,50 +39,8 @@ class SpecificFilingRequest(BaseModel):
     years: Optional[List[int]] = None  # Changed from single year to multiple years
     limit: Optional[int] = 10
 
-class ProcessDocumentRequest(BaseModel):
-    ticker: str
-    accession_number: str
-    document_id: Optional[str] = None
-
-class ProcessMultipleDocumentsRequest(BaseModel):
-    filings: List[ProcessDocumentRequest]
-
-class ProcessDocumentResponse(BaseModel):
-    document_id: str
-    chunks_created: int
-    metadata: Dict[str, Any]
-    filing_info: Dict[str, Any]
-    skipped: Optional[bool] = False
-
-class ProcessMultipleDocumentsResponse(BaseModel):
-    total_requested: int
-    processed: int
-    skipped: int
-    total_chunks_created: int
-    results: List[ProcessDocumentResponse]
-
-class SECDocumentLibraryResponse(BaseModel):
-    documents: List[Dict[str, Any]]
-    total_count: int
-    total_chunks: int
-    companies: List[str]
-    form_types: List[str]
-
-class SECAnalyticsResponse(BaseModel):
-    total_documents: int
-    total_chunks: int
-    companies_count: int
-    form_types_distribution: Dict[str, int]
-    chunks_per_document_avg: float
-    recent_activity: List[Dict[str, Any]]
-    company_distribution: Dict[str, int]
-    filing_date_range: Dict[str, str]
-
-class ChunkVisualizationResponse(BaseModel):
-    document_id: str
-    document_info: Dict[str, Any]
-    chunks: List[Dict[str, Any]]
-    chunk_stats: Dict[str, Any]
+# Global dictionary to track batch processing status
+batch_processing_status: Dict[str, BatchProcessingStatus] = {}
 
 async def get_sec_service() -> SECDocumentService:
     """Dependency to get SEC document service"""
@@ -168,11 +137,13 @@ async def process_sec_document(
     Retrieve and process a SEC document for the knowledge base
     """
     try:
-        # Initialize token tracking for this request
-        from app.services.token_usage_tracker import TokenUsageTracker
-        token_tracker = TokenUsageTracker()
-        tracking_id = await token_tracker.start_tracking(
-            operation_type="sec_document_processing",
+        # Initialize token tracking for this request with azure manager
+        token_tracker = TokenUsageTracker(azure_manager=sec_service.azure_manager)
+        tracking_id = token_tracker.start_tracking(
+            session_id=f"sec_processing_{request.ticker}_{request.accession_number}",
+            service_type=ServiceType.SEC_DOCS,
+            operation_type=OperationType.DOCUMENT_ANALYSIS,
+            endpoint="/sec/process-document",
             user_id="system",  # SEC processing is typically a system operation
             metadata={
                 "ticker": request.ticker,
@@ -190,12 +161,25 @@ async def process_sec_document(
                 tracking_id=tracking_id
             )
             
-            # Finalize tracking
-            await token_tracker.finalize_tracking(tracking_id)
+            # Finalize tracking with success
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "processed_chunks": result.get("chunk_count", 0),
+                    "processing_status": "completed"
+                }
+            )
             
             return ProcessDocumentResponse(**result)
         except Exception as e:
-            await token_tracker.finalize_tracking(tracking_id, error=str(e))
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=False,
+                http_status_code=500,
+                error_message=str(e)
+            )
             raise
             
     except Exception as e:
@@ -207,82 +191,213 @@ async def process_sec_document(
 async def process_multiple_sec_documents(
     request: ProcessMultipleDocumentsRequest,
     sec_service: SECDocumentService = Depends(get_sec_service)
-):
+):    
     """
-    Retrieve and process multiple SEC documents for the knowledge base
+    Retrieve and process multiple SEC documents for the knowledge base with parallel processing
     """
+    start_time = time.time()
+    batch_id = request.batch_id or f"batch_{int(time.time())}"
+    
     try:
-        logger.info(f"Processing {len(request.filings)} SEC documents")
+        logger.info(f"Starting parallel processing of {len(request.filings)} SEC documents (batch: {batch_id})")
         
-        results = []
-        processed_count = 0
-        skipped_count = 0
-        total_chunks = 0
-        
-        for filing_request in request.filings:
-            try:
-                # Initialize token tracking for each document
-                from app.services.token_usage_tracker import TokenUsageTracker
-                token_tracker = TokenUsageTracker()
-                tracking_id = await token_tracker.start_tracking(
-                    operation_type="sec_document_processing_batch",
-                    user_id="system",
-                    metadata={
-                        "ticker": filing_request.ticker,
-                        "accession_number": filing_request.accession_number,
-                        "document_id": filing_request.document_id,
-                        "batch_processing": True
-                    }
-                )
-                
-                try:
-                    result = await sec_service.retrieve_and_process_document(
-                        ticker=filing_request.ticker,
-                        accession_number=filing_request.accession_number,
-                        document_id=filing_request.document_id,
-                        token_tracker=token_tracker,
-                        tracking_id=tracking_id
-                    )
-                    
-                    # Finalize tracking
-                    await token_tracker.finalize_tracking(tracking_id)
-                    
-                except Exception as doc_error:
-                    await token_tracker.finalize_tracking(tracking_id, error=str(doc_error))
-                    raise doc_error
-                
-                result_response = ProcessDocumentResponse(**result)
-                results.append(result_response)
-                
-                if result.get('skipped', False):
-                    skipped_count += 1
-                else:
-                    processed_count += 1
-                    total_chunks += result.get('chunks_created', 0)
-                    
-            except Exception as e:
-                logger.error(f"Error processing filing {filing_request.accession_number}: {e}")
-                # Continue processing other filings even if one fails
-                error_result = ProcessDocumentResponse(
-                    document_id=f"{filing_request.ticker}_{filing_request.accession_number}",
-                    chunks_created=0,
-                    metadata={"status": "error", "message": str(e)},
-                    filing_info={"ticker": filing_request.ticker, "accession_number": filing_request.accession_number},
-                    skipped=False
-                )
-                results.append(error_result)
-        
-        return ProcessMultipleDocumentsResponse(
-            total_requested=len(request.filings),
-            processed=processed_count,
-            skipped=skipped_count,
-            total_chunks_created=total_chunks,
-            results=results
+        # Initialize batch status tracking
+        batch_status = BatchProcessingStatus(
+            batch_id=batch_id,
+            total_documents=len(request.filings),
+            completed_documents=0,
+            failed_documents=0,
+            current_processing=[],
+            overall_progress_percent=0.0,
+            started_at=datetime.now(),
+            status="queued"  # Start as queued, will change to processing when first document starts
         )
+        batch_processing_status[batch_id] = batch_status
+        
+        # Progress tracking callback
+        async def update_batch_progress(progress: DocumentProcessingProgress):
+            # Update current processing list
+            current_processing = [p for p in batch_status.current_processing 
+                                 if p.document_id != progress.document_id]
+            if progress.stage != ProcessingStage.COMPLETED and progress.stage != ProcessingStage.FAILED:
+                current_processing.append(progress)
+            batch_status.current_processing = current_processing
             
+            # Update batch status to "processing" when first document starts
+            if progress.stage == ProcessingStage.DOWNLOADING and batch_status.status != "processing":
+                batch_status.status = "processing"
+                logger.info(f"🔄 Batch {batch_id}: Status updated to PROCESSING - first document started")
+            elif progress.stage != ProcessingStage.QUEUED and batch_status.status == "processing":
+                logger.debug(f"Batch {batch_id}: Document {progress.document_id} -> {progress.stage.value} ({progress.progress_percent:.1f}%) - {progress.message}")
+            
+            # Update completion counts
+            if progress.stage == ProcessingStage.COMPLETED:
+                batch_status.completed_documents += 1
+                logger.info(f"Batch {batch_id}: Document {progress.document_id} completed! ({batch_status.completed_documents}/{batch_status.total_documents})")
+            elif progress.stage == ProcessingStage.FAILED:
+                batch_status.failed_documents += 1
+                logger.info(f"Batch {batch_id}: Document {progress.document_id} failed! ({batch_status.failed_documents} failures)")
+            
+            # Calculate overall progress
+            completed_or_failed = batch_status.completed_documents + batch_status.failed_documents
+            batch_status.overall_progress_percent = (completed_or_failed / batch_status.total_documents * 100.0)
+            
+            # Add individual document progress to overall calculation
+            if len(current_processing) > 0:
+                # Add partial progress from currently processing documents
+                partial_progress = sum(p.progress_percent / 100.0 for p in current_processing) / batch_status.total_documents * 100.0
+                batch_status.overall_progress_percent = min(100.0, batch_status.overall_progress_percent + partial_progress)
+            
+            logger.debug(f"Batch {batch_id} progress: {batch_status.overall_progress_percent:.1f}% - {len(current_processing)} processing, {batch_status.completed_documents} completed, {batch_status.failed_documents} failed")
+        
+        # Create semaphore for controlling parallel processing
+        max_parallel = min(request.max_parallel, len(request.filings))
+        semaphore = asyncio.Semaphore(max_parallel)
+        
+        async def process_with_semaphore(filing_request):
+            # Create initial progress when document is picked up
+            document_id = f"{filing_request.ticker}_{filing_request.accession_number}"
+            initial_progress = DocumentProcessingProgress(
+                document_id=document_id,
+                ticker=filing_request.ticker,
+                accession_number=filing_request.accession_number,
+                stage=ProcessingStage.QUEUED,
+                progress_percent=0.0,
+                message="Starting processing...",
+                started_at=datetime.now(),
+                updated_at=datetime.now()
+            )
+            await update_batch_progress(initial_progress)
+            
+            async with semaphore:
+                # Update to indicate actually starting processing
+                initial_progress.stage = ProcessingStage.DOWNLOADING
+                initial_progress.message = "Acquired processing slot, starting download..."
+                initial_progress.progress_percent = 5.0
+                await update_batch_progress(initial_progress)
+                
+                return await process_single_document_with_progress(
+                    filing_request, sec_service, batch_id, update_batch_progress
+                )
+        
+        # Process documents in parallel
+        logger.info(f"Processing {len(request.filings)} documents with max {max_parallel} parallel threads")
+        tasks = [process_with_semaphore(filing) for filing in request.filings]
+        
+        # Start processing in background without waiting for completion
+        async def background_processing():
+            """Run the actual processing in background"""
+            try:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Process results
+                total_chunks = 0
+                total_tokens = 0
+                processed_count = 0
+                skipped_count = 0
+                failed_count = 0
+                
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Document processing failed: {result}")
+                        failed_count += 1
+                    else:
+                        if result.skipped:
+                            skipped_count += 1
+                        else:
+                            processed_count += 1
+                            total_chunks += result.chunks_created
+                            total_tokens += result.tokens_used or 0
+                
+                processing_time = time.time() - start_time
+                
+                # Update final batch status
+                batch_status.completed_documents = processed_count + skipped_count
+                batch_status.failed_documents = failed_count
+                batch_status.overall_progress_percent = 100.0
+                batch_status.current_processing = []
+                batch_status.finished_at = datetime.now()
+                batch_status.status = "completed"
+                
+                logger.info(f"Background processing completed: {processed_count} processed, {skipped_count} skipped, {failed_count} failed in {processing_time:.2f}s")
+                
+            except Exception as e:
+                logger.error(f"Error in background processing: {e}")
+                # Update batch status with error
+                batch_status.status = "failed"
+                batch_status.finished_at = datetime.now()
+                batch_status.error_message = str(e)
+        
+        # Start background processing task without waiting
+        asyncio.create_task(background_processing())
+        
+        # Return immediately with batch_id so frontend can start polling
+        logger.info(f"✅ Batch {batch_id} started in background, returning batch_id for polling")
+        return ProcessMultipleDocumentsResponse(
+            batch_id=batch_id,
+            results=[],  # Empty for now, client should poll for results
+            summary={
+                "total_requested": len(request.filings),
+                "processed": 0,  # Will be updated via polling
+                "skipped": 0,
+                "failed": 0,
+                "processing_time_seconds": 0.0,
+                "parallel_threads_used": max_parallel,
+                "status": "processing_started"
+            },
+            processing_time_seconds=0.0,
+            total_chunks_created=0,
+            total_tokens_used=0
+        )
+        
     except Exception as e:
-        logger.error(f"Error processing multiple SEC documents: {e}")
+        logger.error(f"Error in parallel processing: {e}")
+        # Update batch status with error instead of deleting
+        if batch_id in batch_processing_status:
+            batch_processing_status[batch_id].status = "failed"
+            batch_processing_status[batch_id].finished_at = datetime.now()
+            batch_processing_status[batch_id].error_message = str(e)
         raise HTTPException(status_code=500, detail=f"Failed to process documents: {str(e)}")
+
+# Add new endpoint for progress tracking
+@router.get("/batch/{batch_id}/status", response_model=BatchProcessingStatus)
+async def get_batch_processing_status(batch_id: str):
+    """Get the current status of a batch processing operation"""
+    if batch_id not in batch_processing_status:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return batch_processing_status[batch_id]
+
+@router.get("/batches", response_model=List[BatchProcessingStatus])
+async def list_batch_statuses():
+    """List all batch processing statuses"""
+    return list(batch_processing_status.values())
+
+@router.delete("/batch/{batch_id}")
+async def delete_batch_status(batch_id: str):
+    """Delete a batch processing status (for cleanup)"""
+    if batch_id not in batch_processing_status:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    del batch_processing_status[batch_id]
+    return {"message": f"Batch {batch_id} status deleted"}
+
+@router.post("/batches/cleanup")
+async def cleanup_old_batches(older_than_hours: int = 24):
+    """Clean up batch statuses older than specified hours"""
+    cutoff_time = datetime.now() - timedelta(hours=older_than_hours)
+    
+    deleted_count = 0
+    batch_ids_to_delete = []
+    
+    for batch_id, status in batch_processing_status.items():
+        if (status.finished_at and status.finished_at < cutoff_time) or \
+           (not status.finished_at and status.started_at < cutoff_time):
+            batch_ids_to_delete.append(batch_id)
+    
+    for batch_id in batch_ids_to_delete:
+        del batch_processing_status[batch_id]
+        deleted_count += 1
+    
+    return {"deleted_count": deleted_count, "deleted_batches": batch_ids_to_delete}
 
 @router.get("/health")
 async def health_check():
@@ -393,13 +508,45 @@ async def get_sec_analytics(
     try:
         logger.info("Getting SEC analytics")
         
-        # Get all SEC documents from Azure Search
-        results = await sec_service.azure_manager.hybrid_search(
-            query="*",
-            top_k=1000  # Get a large sample for analytics
-        )
+        # Get ALL SEC documents from Azure Search using direct search without vector scoring
+        # This ensures we get accurate analytics for all documents, not just a sample
+        all_results = []
+        skip = 0
+        batch_size = 1000  # Azure AI Search max per request
         
-        logger.info(f"Found {len(results)} chunks for analytics")
+        while True:
+            # Use direct search client to get all documents in batches
+            search_results = await sec_service.azure_manager.search_client.search(
+                search_text="*",
+                select=["id", "content", "document_id", "source", "chunk_id", 
+                       "document_type", "company", "filing_date", "section_type", 
+                       "page_number", "processed_at", "ticker", "cik", "form_type", 
+                       "accession_number", "industry", "document_url", "sic", 
+                       "entity_type", "period_end_date", "chunk_index"],
+                top=batch_size,
+                skip=skip,
+                query_type="simple"  # Use simple query for better performance
+            )
+            
+            # Convert async results to list
+            batch_results = []
+            async for result in search_results:
+                batch_results.append(dict(result))
+            
+            if not batch_results:
+                break
+                
+            all_results.extend(batch_results)
+            logger.info(f"Retrieved batch of {len(batch_results)} chunks (total: {len(all_results)})")
+            
+            # If we got fewer results than batch_size, we've reached the end
+            if len(batch_results) < batch_size:
+                break
+                
+            skip += batch_size
+        
+        logger.info(f"Found {len(all_results)} total chunks for analytics")
+        results = all_results
         
         if not results:
             return SECAnalyticsResponse(
@@ -696,111 +843,6 @@ async def get_sec_document_library(
         logger.error(f"Error getting SEC document library: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get document library: {str(e)}")
 
-@router.get("/analytics", response_model=SECAnalyticsResponse)
-async def get_sec_analytics(
-    sec_service: SECDocumentService = Depends(get_sec_service)
-):
-    """
-    Get analytics about SEC documents in the vector store
-    """
-    try:
-        logger.info("Getting SEC analytics")
-        
-        # Get all SEC documents from Azure Search
-        results = await sec_service.azure_manager.hybrid_search(
-            query="*",
-            top_k=1000  # Get a large sample for analytics
-        )
-        
-        logger.info(f"Found {len(results)} chunks for analytics")
-        
-        if not results:
-            return SECAnalyticsResponse(
-                total_documents=0,
-                total_chunks=0,
-                companies_count=0,
-                form_types_distribution={},
-                chunks_per_document_avg=0,
-                recent_activity=[],
-                company_distribution={},
-                filing_date_range={}
-            )
-        
-        # Analyze the data
-        unique_documents = set()
-        form_types_distribution = {}
-        companies = {}
-        filing_dates = []
-        
-        for result in results:
-            doc_id = result.get('document_id', '')
-            if doc_id:
-                unique_documents.add(doc_id)
-            
-            form_type = result.get('form_type', '')
-            if form_type:
-                form_types_distribution[form_type] = form_types_distribution.get(form_type, 0) + 1
-            
-            company = result.get('company', '')
-            if company:
-                companies[company] = companies.get(company, 0) + 1
-            
-            filing_date = result.get('filing_date', '')
-            if filing_date:
-                filing_dates.append(filing_date)
-        
-        # Recent activity (last 10 processed documents)
-        recent_results = sorted(
-            [r for r in results if r.get('processed_at')],
-            key=lambda x: x.get('processed_at', ''),
-            reverse=True
-        )[:50]  # Get more results to find unique documents
-        
-        recent_activity = []
-        seen_docs = set()
-        for result in recent_results:
-            doc_id = result.get('document_id', '')
-            if doc_id not in seen_docs and len(recent_activity) < 10:
-                recent_activity.append({
-                    "document_id": doc_id,
-                    "company": result.get('company', ''),
-                    "form_type": result.get('form_type', ''),
-                    "filing_date": result.get('filing_date', ''),
-                    "processed_at": result.get('processed_at', ''),
-                    "chunk_count": len([r for r in results if r.get('document_id') == doc_id])
-                })
-                seen_docs.add(doc_id)
-        
-        # Calculate date range
-        filing_date_range = {}
-        if filing_dates:
-            filing_dates.sort()
-            filing_date_range = {
-                "earliest": filing_dates[0],
-                "latest": filing_dates[-1]
-            }
-        
-        total_documents = len(unique_documents)
-        total_chunks = len(results)
-        chunks_per_doc_avg = total_chunks / total_documents if total_documents > 0 else 0
-        
-        logger.info(f"Analytics: {total_documents} docs, {total_chunks} chunks, {len(companies)} companies")
-        
-        return SECAnalyticsResponse(
-            total_documents=total_documents,
-            total_chunks=total_chunks,
-            companies_count=len(companies),
-            form_types_distribution=form_types_distribution,
-            chunks_per_document_avg=round(chunks_per_doc_avg, 2),
-            recent_activity=recent_activity,
-            company_distribution=companies,
-            filing_date_range=filing_date_range
-        )
-        
-    except Exception as e:
-        logger.error(f"Error getting SEC analytics: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get analytics: {str(e)}")
-
 @router.get("/test-index")
 async def test_search_index(
     sec_service: SECDocumentService = Depends(get_sec_service)
@@ -840,3 +882,233 @@ async def test_search_index(
     except Exception as e:
         logger.error(f"Test index error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to test index: {str(e)}")
+
+async def process_single_document_with_progress(
+    filing_request: ProcessDocumentRequest,
+    sec_service: SECDocumentService,
+    batch_id: str,
+    progress_callback=None
+) -> ProcessDocumentResponse:
+    """Process a single document with progress tracking"""
+    start_time = time.time()
+    document_id = f"{filing_request.ticker}_{filing_request.accession_number}"
+    
+    # Initialize progress tracking
+    progress = DocumentProcessingProgress(
+        document_id=document_id,
+        ticker=filing_request.ticker,
+        accession_number=filing_request.accession_number,
+        stage=ProcessingStage.QUEUED,
+        progress_percent=0.0,
+        message="Queued for processing",
+        started_at=datetime.now(),
+        updated_at=datetime.now()
+    )
+    
+    async def update_progress(stage: ProcessingStage, percent: float, message: str):
+        progress.stage = stage
+        progress.progress_percent = percent
+        progress.message = message
+        progress.updated_at = datetime.now()
+        logger.info(f"Document {document_id}: {stage.value} ({percent:.1f}%) - {message}")
+        if progress_callback:
+            await progress_callback(progress)
+    
+    # Immediately notify that processing has started
+    if progress_callback:
+        await progress_callback(progress)
+    
+    try:
+        # Initialize token tracking
+        token_tracker = TokenUsageTracker(azure_manager=sec_service.azure_manager)
+        tracking_id = token_tracker.start_tracking(
+            session_id=f"sec_parallel_{filing_request.ticker}_{filing_request.accession_number}",
+            service_type=ServiceType.SEC_DOCS,
+            operation_type=OperationType.DOCUMENT_ANALYSIS,
+            endpoint="/sec/process-multiple-documents",
+            user_id="system",
+            metadata={
+                "ticker": filing_request.ticker,
+                "accession_number": filing_request.accession_number,
+                "document_id": filing_request.document_id,
+                "batch_processing": True,
+                "batch_id": batch_id
+            }
+        )
+        
+        # Update progress: Starting download
+        await update_progress(ProcessingStage.DOWNLOADING, 10.0, "Downloading document from SEC EDGAR")
+        
+        # Check if document already exists (preserve existing feature)
+        document_exists = await sec_service.azure_manager.check_document_exists(filing_request.accession_number)
+        if document_exists:
+            await update_progress(ProcessingStage.COMPLETED, 100.0, "Document already exists, skipping")
+            
+            # Finalize tracking for skipped document
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "processing_status": "skipped",
+                    "reason": "document_already_exists"
+                }
+            )
+            
+            progress.completed_at = datetime.now()
+            return ProcessDocumentResponse(
+                document_id=document_id,
+                chunks_created=0,
+                metadata={"status": "skipped", "reason": "Already exists in knowledge base"},
+                filing_info={"ticker": filing_request.ticker, "accession_number": filing_request.accession_number},
+                skipped=True,
+                processing_time_seconds=time.time() - start_time,
+                tokens_used=0
+            )
+        
+        # Update progress: Parsing
+        await update_progress(ProcessingStage.PARSING, 30.0, "Parsing document content")
+        
+        # Process the document
+        result = await sec_service.retrieve_and_process_document(
+            ticker=filing_request.ticker,
+            accession_number=filing_request.accession_number,
+            document_id=filing_request.document_id,
+            token_tracker=token_tracker,
+            tracking_id=tracking_id,
+            progress_callback=lambda stage, percent, msg: update_progress(
+                ProcessingStage.CHUNKING if "chunk" in msg.lower() else
+                ProcessingStage.EMBEDDING if "embedding" in msg.lower() else
+                ProcessingStage.INDEXING if "index" in msg.lower() else
+                ProcessingStage.PARSING,
+                30.0 + (percent * 0.6),  # Scale to 30-90% range
+                msg
+            )
+        )
+        
+        # Update progress: Completed
+        await update_progress(ProcessingStage.COMPLETED, 100.0, "Document processing completed")
+        
+        # Finalize tracking with success
+        await token_tracker.finalize_tracking(
+            tracking_id=tracking_id,
+            success=True,
+            http_status_code=200,
+            metadata={
+                "processed_chunks": result.get("chunk_count", 0),
+                "processing_status": "completed",
+                "batch_processing": True,
+                "batch_id": batch_id
+            }
+        )
+        
+        progress.completed_at = datetime.now()
+        progress.chunks_created = result.get("chunk_count", 0)
+        
+        return ProcessDocumentResponse(
+            document_id=document_id,
+            chunks_created=result.get("chunk_count", 0),
+            metadata=result.get("metadata", {}),
+            filing_info=result.get("filing_info", {}),
+            skipped=False,
+            processing_time_seconds=time.time() - start_time,
+            tokens_used=result.get("tokens_used", 0)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error processing document {document_id}: {e}")
+        
+        # Update progress: Failed
+        await update_progress(ProcessingStage.FAILED, 0.0, f"Processing failed: {str(e)}")
+        progress.error_message = str(e)
+        progress.completed_at = datetime.now()
+        
+        # Finalize tracking with error
+        try:
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=False,
+                http_status_code=500,
+                error_message=str(e)
+            )
+        except:
+            pass
+        
+        return ProcessDocumentResponse(
+            document_id=document_id,
+            chunks_created=0,
+            metadata={"status": "error", "message": str(e)},
+            filing_info={"ticker": filing_request.ticker, "accession_number": filing_request.accession_number},
+            skipped=False,
+            processing_time_seconds=time.time() - start_time,
+            tokens_used=0
+        )
+
+@router.delete("/documents/{document_id}")
+async def delete_sec_document(
+    document_id: str,
+    sec_service: SECDocumentService = Depends(get_sec_service)
+):
+    """
+    Delete a SEC document and all its chunks from the vector store
+    """
+    try:
+        logger.info(f"Deleting SEC document: {document_id}")
+        
+        # Search for all chunks belonging to this document
+        chunks_to_delete = await sec_service.azure_manager.hybrid_search(
+            query="*",
+            filters=f"document_id eq '{document_id}'",
+            top_k=10000  # Large number to get all chunks
+        )
+        
+        if not chunks_to_delete:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        logger.info(f"Found {len(chunks_to_delete)} chunks to delete for document {document_id}")
+        
+        # Delete all chunks from the search index
+        chunk_ids_to_delete = [chunk.get('id') for chunk in chunks_to_delete if chunk.get('id')]
+        
+        if chunk_ids_to_delete:
+            # Delete chunks in batches to avoid overwhelming the search service
+            batch_size = 100
+            deleted_count = 0
+            
+            for i in range(0, len(chunk_ids_to_delete), batch_size):
+                batch = chunk_ids_to_delete[i:i + batch_size]
+                try:
+                    # Create documents to delete (just need the id field)
+                    delete_documents = [{"id": chunk_id} for chunk_id in batch]
+                    
+                    # Upload the delete batch
+                    result = await sec_service.azure_manager.search_client.delete_documents(delete_documents)
+                    deleted_count += len(batch)
+                    logger.info(f"Deleted batch of {len(batch)} chunks (total: {deleted_count}/{len(chunk_ids_to_delete)})")
+                    
+                except Exception as batch_error:
+                    logger.error(f"Error deleting batch: {batch_error}")
+                    # Continue with next batch even if one fails
+            
+            logger.info(f"Successfully deleted {deleted_count} chunks for document {document_id}")
+            
+            return {
+                "message": f"Successfully deleted document {document_id}",
+                "document_id": document_id,
+                "chunks_deleted": deleted_count,
+                "total_chunks_found": len(chunks_to_delete)
+            }
+        else:
+            logger.warning(f"No chunk IDs found to delete for document {document_id}")
+            return {
+                "message": f"Document {document_id} had no valid chunks to delete",
+                "document_id": document_id,
+                "chunks_deleted": 0,
+                "total_chunks_found": len(chunks_to_delete)
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting SEC document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")

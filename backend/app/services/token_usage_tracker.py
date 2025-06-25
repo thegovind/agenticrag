@@ -605,9 +605,8 @@ class TokenUsageTracker:
         return {
             "services": service_usage,
             "total_services": len(service_usage),
-            "period_days": days_back
-        }
-    
+            "period_days": days_back        }
+        
     async def update_usage(self,
                           tracking_id: str,
                           model_name: str = None,
@@ -616,20 +615,27 @@ class TokenUsageTracker:
                           completion_tokens: int = 0,
                           response_text: str = None,
                           **kwargs):
-        """Update token usage for an active tracking session"""
+        """Update token usage for an active tracking session - accumulates tokens"""
         if tracking_id in self._active_sessions:
             record = self._active_sessions[tracking_id]
             if model_name:
                 record.model_name = model_name
             if deployment_name:
                 record.deployment_name = deployment_name
+            
+            # ACCUMULATE token usage instead of overwriting
             if prompt_tokens:
-                record.prompt_tokens = prompt_tokens
+                record.prompt_tokens += prompt_tokens
             if completion_tokens:
-                record.completion_tokens = completion_tokens
+                record.completion_tokens += completion_tokens
+            
             if response_text:
-                record.response_text = response_text
-                record.response_size_chars = len(response_text)
+                # For response text, append if we already have some, otherwise set
+                if record.response_text:
+                    record.response_text += f"\n---\n{response_text}"
+                else:
+                    record.response_text = response_text
+                record.response_size_chars = len(record.response_text)
             
             # Update total tokens
             record.total_tokens = record.prompt_tokens + record.completion_tokens
@@ -641,6 +647,8 @@ class TokenUsageTracker:
                 record.prompt_cost = (record.prompt_tokens / 1000) * pricing["prompt"]
                 record.completion_cost = (record.completion_tokens / 1000) * pricing["completion"]
                 record.total_cost = record.prompt_cost + record.completion_cost
+                
+            logger.debug(f"Updated usage for {tracking_id}: prompt={record.prompt_tokens}, completion={record.completion_tokens}, total={record.total_tokens}")
         else:
             logger.warning(f"Tracking session {tracking_id} not found")
 

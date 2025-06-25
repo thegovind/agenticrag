@@ -327,24 +327,34 @@ class SECDocumentService:
         except Exception as e:
             logger.error(f"Error getting filings for {ticker}: {e}")
             return []
-
+    
     async def retrieve_and_process_document(
         self, 
         ticker: str, 
         accession_number: str,
         document_id: Optional[str] = None,
         token_tracker=None,
-        tracking_id=None) -> Dict[str, Any]:
+        tracking_id=None,
+        progress_callback=None) -> Dict[str, Any]:
         """
         Retrieve SEC document and process it into chunks using md2chunks
         """
         try:
             logger.info(f"Retrieving SEC document: {ticker} - {accession_number}")
             
+            # Progress callback helper
+            async def report_progress(percent: float, message: str):
+                if progress_callback:
+                    await progress_callback("processing", percent, message)
+                logger.info(f"Progress: {percent:.1f}% - {message}")
+            
+            await report_progress(5.0, "Starting document retrieval")
+            
             # Check if document already exists in the index
             document_exists = await self.azure_manager.check_document_exists(accession_number)
             if document_exists:
                 logger.info(f"Document {accession_number} already exists in index, skipping processing")
+                await report_progress(100.0, "Document already exists, skipping")
                 return {
                     "document_id": f"{ticker}_{accession_number}",
                     "chunks_created": 0,
@@ -352,9 +362,12 @@ class SECDocumentService:
                     "filing_info": {"ticker": ticker, "accession_number": accession_number},
                     "skipped": True
                 }
-                
+            
+            await report_progress(10.0, "Connecting to SEC EDGAR API")
+            
             # Get the company and filing
             company = Company(ticker.upper())
+            await report_progress(15.0, "Searching for filing in company records")
             
             # Get all filings and find the one with matching accession number
             all_filings = company.get_filings()
@@ -366,7 +379,10 @@ class SECDocumentService:
             
             if not filing:
                 raise ValueError(f"Filing not found: {accession_number}")
-              # Extract document metadata
+            
+            await report_progress(20.0, "Filing found, extracting metadata")
+            
+            # Extract document metadata
             metadata = {
                 "ticker": ticker.upper(),
                 "company_name": company.name,
@@ -380,14 +396,19 @@ class SECDocumentService:
                 "accession_number": accession_number,
                 "document_type": "SEC Filing",
                 "source": "SEC EDGAR",
-                "file_size": getattr(filing, 'size', None),                "document_url": getattr(filing.document, 'url', '') if hasattr(filing, 'document') and filing.document else ''
+                "file_size": getattr(filing, 'size', None),
+                "document_url": getattr(filing.document, 'url', '') if hasattr(filing, 'document') and filing.document else ''
             }
             
             logger.info(f"Document metadata: {metadata}")
             
             # Ensure document_id is set
             if not document_id:
-                document_id = f"{ticker}_{accession_number}_{filing.form}"            # Get the document content
+                document_id = f"{ticker}_{accession_number}_{filing.form}"
+            
+            await report_progress(30.0, "Downloading document content from SEC")
+            
+            # Get the document content
             # edgartools provides different ways to get content
             if hasattr(filing, 'text'):
                 content = filing.text()
@@ -397,20 +418,30 @@ class SECDocumentService:
                 content = str(filing)
             
             logger.info(f"Retrieved content length: {len(content)} characters")
+            await report_progress(45.0, f"Downloaded document ({len(content):,} characters)")
             
             # Process the document into chunks
+            await report_progress(50.0, "Processing document into chunks")
             chunks = await self._process_content_with_md2chunks(
-                content, document_id, metadata
+                content, document_id, metadata, progress_callback
             )
-              # Generate embeddings for chunks
-            await self._generate_embeddings_for_chunks(chunks, token_tracker, tracking_id)
             
+            await report_progress(70.0, f"Generated {len(chunks)} chunks, starting embeddings")
+            
+            # Generate embeddings for chunks with progress updates
+            await self._generate_embeddings_for_chunks(
+                chunks, token_tracker, tracking_id, progress_callback
+            )
+            await report_progress(88.0, "Preparing documents for search index")
             # Store in Azure Search
-            search_documents = await self._prepare_search_documents(chunks)
+            search_documents = await self._prepare_search_documents(chunks, token_tracker, tracking_id)
             if search_documents:
+                await report_progress(92.0, f"Indexing {len(search_documents)} documents")
                 await self.azure_manager.add_documents_to_index(search_documents)
                 logger.info(f"Added {len(search_documents)} documents to search index")
+                await report_progress(98.0, "Successfully indexed all documents")
             
+            await report_progress(100.0, f"Completed processing {len(chunks)} chunks")
             logger.info(f"Successfully processed document with {len(chunks)} chunks")
             
             return {
@@ -421,9 +452,9 @@ class SECDocumentService:
                     "form_type": filing.form,
                     "filing_date": filing.filing_date.isoformat(),
                     "accession_number": accession_number,
-                    "company_name": company.name,
-                    "ticker": ticker.upper()
-                }
+                    "company_name": company.name,                    "ticker": ticker.upper()
+                },
+                "tokens_used": getattr(chunks[0], 'total_tokens_used', 0) if chunks else 0
             }
             
         except Exception as e:
@@ -435,7 +466,8 @@ class SECDocumentService:
         self, 
         content: str, 
         document_id: str, 
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
+        progress_callback=None
     ) -> List[DocumentChunk]:
         """
         Process content using md2chunks for intelligent chunking
@@ -443,19 +475,29 @@ class SECDocumentService:
         try:
             logger.info(f"Processing content with md2chunks, length: {len(content)}")
             
+            # Progress callback helper
+            async def report_progress(percent: float, message: str):
+                if progress_callback:
+                    await progress_callback("processing", percent, message)
+            
+            await report_progress(50.0, "Cleaning and preparing content")
+            
             # Clean and prepare content for markdown processing
             cleaned_content = self._clean_sec_content(content)
             
             # Convert to markdown if it's HTML
             if content.strip().startswith('<'):
+                await report_progress(55.0, "Converting HTML to markdown")
                 markdown_content = self._html_to_markdown(cleaned_content)
             else:
                 markdown_content = cleaned_content
             
             logger.info(f"Markdown content length: {len(markdown_content)}")
+            await report_progress(60.0, "Starting intelligent document chunking")
             
             # Use md2chunks to intelligently chunk the content
-            try:                # Configure chunker for financial documents
+            try:
+                # Configure chunker for financial documents
                 chunks_data = self.chunker.chunk(
                     markdown_content,
                     chunk_size=settings.chunk_size,  # Use configured chunk size
@@ -463,12 +505,22 @@ class SECDocumentService:
                     separator="\n\n"  # Prefer paragraph breaks
                 )
                 logger.info(f"md2chunks created {len(chunks_data)} chunks")
+                await report_progress(65.0, f"Created {len(chunks_data)} intelligent chunks")
             except Exception as e:
                 logger.warning(f"md2chunks failed: {e}, falling back to simple chunking")
                 chunks_data = self._fallback_chunking(markdown_content)
-              # Convert to DocumentChunk objects
+                await report_progress(65.0, f"Created {len(chunks_data)} fallback chunks")
+            
+            await report_progress(68.0, "Converting chunks to document objects")
+            
+            # Convert to DocumentChunk objects
             document_chunks = []
             for i, chunk_data in enumerate(chunks_data):
+                # Report progress every 10 chunks
+                if i % 10 == 0 and progress_callback:
+                    percent = 68.0 + (i / len(chunks_data)) * 2.0  # 68-70% range
+                    await progress_callback("processing", percent, f"Processing chunk {i+1}/{len(chunks_data)}")
+                
                 # Handle md2chunks Attachment objects
                 if hasattr(chunk_data, 'content'):
                     # This is an Attachment object from md2chunks
@@ -485,16 +537,21 @@ class SECDocumentService:
                 
                 if len(chunk_content.strip()) < 50:  # Skip very short chunks
                     continue
-                
-                # Extract section information from chunk
-                section_info = self._extract_section_info(chunk_content)
+                  # Extract section information from chunk
+                try:
+                    section_info = self._extract_section_info(chunk_content)
+                    if section_info is None:
+                        section_info = {"section_type": "general"}
+                except Exception as e:
+                    logger.warning(f"Error extracting section info: {e}")
+                    section_info = {"section_type": "general"}
                 
                 # Combine metadata
                 final_metadata = {
                     **metadata,
                     **chunk_metadata,
                     "chunk_index": i,
-                    "section_type": section_info.get("section_type", "unknown"),
+                    "section_type": section_info.get("section_type", "general"),
                     "content_type": "markdown",
                     "chunk_method": "md2chunks"
                 }
@@ -648,43 +705,119 @@ class SECDocumentService:
             r'(?i)table\s+of\s+contents': 'table_of_contents',
             r'(?i)signatures?\s*$': 'signatures'
         }
-        
-        # Check financial statement patterns
+          # Check financial statement patterns
         for pattern, section_type in financial_patterns.items():
             if re.search(pattern, check_content):
                 logger.debug(f"Detected financial section: {section_type}")
                 return {"section_type": section_type}
-          # If no specific pattern matches, return general
+        
+        # If no specific pattern matches, return general
         return {"section_type": "general"}
     
     async def _generate_embeddings_for_chunks(self, chunks: List[DocumentChunk], 
-                                             token_tracker=None, tracking_id=None):
+                                             token_tracker=None, tracking_id=None, progress_callback=None):
         """
-        Generate embeddings for document chunks
+        Generate embeddings for document chunks with progress reporting
         """
         try:
             logger.info(f"Generating embeddings for {len(chunks)} chunks")
+            
+            # Start separate tracking for embedding generation
+            embedding_tracking_id = None
+            if token_tracker:
+                from app.services.token_usage_tracker import ServiceType, OperationType
+                embedding_tracking_id = token_tracker.start_tracking(
+                    session_id=f"embedding_{tracking_id}",
+                    service_type=ServiceType.SEC_DOCS,
+                    operation_type=OperationType.EMBEDDING_GENERATION,
+                    endpoint="/sec/generate-embeddings",
+                    user_id="system",
+                    metadata={
+                        "parent_tracking_id": tracking_id,
+                        "chunk_count": len(chunks),
+                        "operation": "chunk_embedding_generation"
+                    }
+                )
+            
             for i, chunk in enumerate(chunks):
                 try:
+                    # Report progress for each embedding generation
+                    if progress_callback:
+                        percent = 70.0 + (i / len(chunks)) * 15.0  # 70-85% range
+                        await progress_callback("processing", percent, f"Generating embedding {i+1}/{len(chunks)}")
+                    
                     embedding = await self.azure_manager.get_embedding(
                         chunk.content, 
                         token_tracker=token_tracker, 
-                        tracking_id=tracking_id
+                        tracking_id=embedding_tracking_id
                     )
                     chunk.embedding = embedding
-                    logger.info(f"Generated embedding for chunk {i+1}/{len(chunks)}")
+                    logger.debug(f"Generated embedding for chunk {i+1}/{len(chunks)}")
+                    
+                    # Add small delay for UI responsiveness in progress updates
+                    if i % 5 == 0:  # Every 5 chunks, allow other tasks to run
+                        await asyncio.sleep(0.01)
+                        
                 except Exception as e:
                     logger.warning(f"Failed to generate embedding for chunk {i}: {e}")
                     chunk.embedding = None
+            
+            # Finalize embedding tracking
+            if token_tracker and embedding_tracking_id:
+                successful_embeddings = sum(1 for chunk in chunks if chunk.embedding is not None)
+                logger.info(f"🔄 FINALIZING EMBEDDING TRACKING - Success: {successful_embeddings}/{len(chunks)}")
+                await token_tracker.finalize_tracking(
+                    tracking_id=embedding_tracking_id,
+                    success=True,
+                    http_status_code=200,
+                    metadata={
+                        "total_chunks": len(chunks),
+                        "successful_embeddings": successful_embeddings,
+                        "failed_embeddings": len(chunks) - successful_embeddings
+                    }
+                )
+                logger.info(f"✅ EMBEDDING TRACKING FINALIZED - ID: {embedding_tracking_id}")
+            
+            if progress_callback:
+                await progress_callback("processing", 85.0, f"Completed embeddings for {len(chunks)} chunks")
                     
         except Exception as e:
             logger.error(f"Error generating embeddings: {e}")
+            # Finalize embedding tracking with error
+            if token_tracker and embedding_tracking_id:
+                logger.error(f"❌ FINALIZING EMBEDDING TRACKING WITH ERROR - ID: {embedding_tracking_id}")
+                await token_tracker.finalize_tracking(
+                    tracking_id=embedding_tracking_id,
+                    success=False,
+                    http_status_code=500,
+                    error_message=str(e)
+                )
+                logger.error(f"🔴 EMBEDDING TRACKING FINALIZED WITH ERROR")
+            if progress_callback:
+                await progress_callback("processing", 85.0, f"Embedding generation failed: {str(e)[:50]}...")
+            raise
     
-    async def _prepare_search_documents(self, chunks: List[DocumentChunk]) -> List[Dict[str, Any]]:
+    async def _prepare_search_documents(self, chunks: List[DocumentChunk], token_tracker=None, tracking_id=None) -> List[Dict[str, Any]]:
         """
         Prepare documents for Azure Search indexing with proper schema mapping and credibility assessment
         """
         search_documents = []
+          # Assess credibility of each chunk with separate tracking
+        credibility_tracking_id = None
+        if token_tracker:
+            from app.services.token_usage_tracker import ServiceType, OperationType
+            credibility_tracking_id = token_tracker.start_tracking(
+                session_id=f"credibility_batch_{tracking_id}",
+                service_type=ServiceType.SEC_DOCS,
+                operation_type=OperationType.CREDIBILITY_CHECK,
+                endpoint="/sec/assess-credibility-batch",
+                user_id="system",
+                metadata={
+                    "parent_tracking_id": tracking_id,
+                    "chunk_count": len(chunks),
+                    "operation": "batch_credibility_assessment"
+                }
+            )
         
         for chunk in chunks:
             if chunk.embedding is None:
@@ -701,8 +834,11 @@ class SECDocumentService:
                     "metadata": metadata
                 }
                 source_url = metadata.get('source', 'SEC EDGAR')
-                credibility_score = await self.credibility_assessor.assess_credibility(processed_doc, source_url)
+                credibility_score = await self.credibility_assessor.assess_credibility(
+                    processed_doc, source_url, token_tracker, credibility_tracking_id
+                )
                 logger.debug(f"Assessed credibility score: {credibility_score:.3f} for chunk {chunk.chunk_id}")
+                
             except Exception as e:
                 logger.warning(f"Failed to assess credibility for chunk {chunk.chunk_id}: {e}")
                 credibility_score = 0.8  # Higher default for SEC documents
@@ -745,10 +881,23 @@ class SECDocumentService:
                 "content_type": metadata.get('content_type', 'text'),
                 "chunk_method": metadata.get('chunk_method', 'unknown'),
                 "file_size": metadata.get('file_size', 0) if metadata.get('file_size') is not None else 0,
-                "document_url": metadata.get('document_url', ''),
-                "content_vector": chunk.embedding
+                "document_url": metadata.get('document_url', ''),                "content_vector": chunk.embedding
             }
             search_documents.append(search_doc)
+        
+        # Finalize credibility tracking
+        if token_tracker and credibility_tracking_id:
+            logger.info(f"🔄 FINALIZING CREDIBILITY TRACKING - Assessed: {len(search_documents)} chunks")
+            await token_tracker.finalize_tracking(
+                tracking_id=credibility_tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "total_chunks_assessed": len(search_documents),
+                    "operation": "batch_credibility_assessment_completed"
+                }
+            )
+            logger.info(f"✅ CREDIBILITY TRACKING FINALIZED - ID: {credibility_tracking_id}")
         
         return search_documents
     

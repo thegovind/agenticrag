@@ -351,12 +351,72 @@ class ApiService {
   }> {
     const queryParams = new URLSearchParams();
     if (params.days) queryParams.append('days', params.days.toString());
-    if (params.service_type) queryParams.append('service_type', params.service_type);
-    if (params.deployment_name) queryParams.append('deployment_name', params.deployment_name);
+    if (params.service_type) queryParams.append('service_type', params.service_type);    if (params.deployment_name) queryParams.append('deployment_name', params.deployment_name);
     if (params.limit) queryParams.append('limit', params.limit.toString());
     if (params.offset) queryParams.append('offset', params.offset.toString());
     
     return this.makeRequest(`/admin/token-usage/requests?${queryParams.toString()}`);
+  }
+  // SEC Documents batch processing methods
+  async processMultipleSECDocuments(request: {
+    filings: Array<{
+      ticker: string;
+      accession_number: string;
+      document_id?: string;
+    }>;
+    batch_id?: string;
+    max_parallel?: number;
+  }): Promise<{
+    batch_id: string;
+    results: any[];
+    summary: any;
+    processing_time_seconds: number;
+    total_chunks_created: number;
+    total_tokens_used: number;
+  }> {
+    return this.makeRequest('/sec/documents/process-multiple', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+  async getBatchStatus(batchId: string): Promise<{
+    batch_id: string;
+    total_documents: number;
+    completed_documents: number;
+    failed_documents: number;
+    current_processing: Array<{
+      document_id: string;
+      ticker: string;
+      accession_number: string;
+      stage: string;
+      progress_percent: number;
+      message: string;
+      started_at: string;
+      updated_at: string;
+      completed_at?: string;
+      error_message?: string;
+      chunks_created: number;
+      tokens_used: number;
+    }>;
+    overall_progress_percent: number;
+    started_at: string;
+    finished_at?: string;
+    estimated_completion?: string;
+    status: string; // "processing", "completed", "failed"
+    error_message?: string;
+  }> {
+    return this.makeRequest(`/sec/batch/${batchId}/status`);
+  }
+
+  async deleteSECDocument(documentId: string): Promise<{
+    message: string;
+    document_id: string;
+    chunks_deleted: number;
+    total_chunks_found: number;
+  }> {
+    return this.makeRequest(`/sec/documents/${documentId}`, {
+      method: 'DELETE'
+    });
   }
 }
 

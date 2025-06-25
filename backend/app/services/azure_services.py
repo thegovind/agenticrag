@@ -525,7 +525,7 @@ class AzureServiceManager:
                         input_text=text[:200] + "..." if len(text) > 200 else text,
                         output_text=f"Generated embedding vector of dimension {len(response.data[0].embedding)}"
                     )
-                    logger.info(f"Token usage tracked for embedding: {response.usage.total_tokens} tokens")
+                    logger.info(f"Embedding token usage tracked: {response.usage.total_tokens} tokens")
                 except Exception as tracking_error:
                     logger.error(f"Failed to track embedding token usage: {tracking_error}")
             return response.data[0].embedding
@@ -563,11 +563,11 @@ class AzureServiceManager:
                        "chunk_index", "content_type", "chunk_method", "file_size"],
                 filter=filters,
                 top=top_k,
-                query_type="semantic",
-                semantic_configuration_name="default-semantic-config"
+                query_type="semantic",                semantic_configuration_name="default-semantic-config"
             )
             search_time = time.time() - search_start
-              # Filter results by minimum score if specified - use async iteration
+            
+            # Filter results by minimum score if specified - use async iteration
             filtered_results = []
             async for result in results:
                 result_dict = dict(result)
@@ -579,7 +579,7 @@ class AzureServiceManager:
             elapsed_time = time.time() - start_time
             logger.debug(f"✅ [Thread-{thread_id}] Hybrid search completed in {elapsed_time:.2f}s (embedding: {search_start - start_time:.2f}s, search: {search_time:.2f}s, found: {len(filtered_results)} results)")
             
-            return filtered_results            
+            return filtered_results
         except Exception as e:
             logger.error(f"Hybrid search failed: {e}")
             raise    
@@ -598,16 +598,18 @@ class AzureServiceManager:
                     validated_documents.append(doc)
                 else:
                     logger.warning(f"Skipping invalid document: {doc.get('id', 'unknown')}")
+                    
             if not validated_documents:
                 logger.error("No valid documents to upload after validation")
                 return False
                 
             logger.info(f"Validated {len(validated_documents)} documents, uploading to search index")
-            result = self.search_client.upload_documents(validated_documents)
+            result = await self.search_client.upload_documents(validated_documents)
             logger.info(f"Search client upload_documents result: {result}")
             
             #     span.set_attribute("uploaded_count", len(validated_documents))
-            #     span.set_attribute("success", True)            logger.info(f"Successfully uploaded {len(validated_documents)} documents to search index")
+            #     span.set_attribute("success", True)
+            logger.info(f"Successfully uploaded {len(validated_documents)} documents to search index")
             # observability.track_kb_update("search_index", len(validated_documents), 0)  # Method not available
             
             return True
@@ -1213,16 +1215,19 @@ class AzureServiceManager:
         try:
             logger.info(f"Checking if document exists in index: {accession_number}")
             
-            # Search for documents with the specific accession number
-            results = self.search_client.search(
+            # Search for documents with the specific accession number using async client
+            search_results = await self.search_client.search(
                 search_text="*",
                 filter=f"accession_number eq '{accession_number}'",
                 select=["id", "accession_number"],
                 top=1
             )
             
-            # Convert results to list to check if any documents exist
-            documents = list(results)
+            # Convert async results to list to check if any documents exist
+            documents = []
+            async for result in search_results:
+                documents.append(result)
+                
             exists = len(documents) > 0
             
             if exists:

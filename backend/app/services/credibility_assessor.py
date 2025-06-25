@@ -36,7 +36,7 @@ class CredibilityAssessor:
             "google.com": 0.5
         }
         
-    async def assess_credibility(self, processed_doc: Dict, source: str) -> float:
+    async def assess_credibility(self, processed_doc: Dict, source: str, token_tracker=None, tracking_id: str = None) -> float:
         """
         Assess the credibility of a document and its source
         
@@ -51,9 +51,9 @@ class CredibilityAssessor:
             logger.info(f"Assessing credibility for source: {source}")
             
             source_score = self._assess_source_credibility(source)
-            content_score = await self._assess_content_credibility(processed_doc)
+            content_score = await self._assess_content_credibility(processed_doc, token_tracker, tracking_id)
             metadata_score = self._assess_metadata_credibility(processed_doc.get("metadata", {}))
-            consistency_score = await self._assess_internal_consistency(processed_doc)
+            consistency_score = await self._assess_internal_consistency(processed_doc, token_tracker, tracking_id)
             
             weights = {
                 "source": 0.3,
@@ -119,7 +119,7 @@ class CredibilityAssessor:
             logger.error(f"Error assessing source credibility: {e}")
             return 0.5
     
-    async def _assess_content_credibility(self, processed_doc: Dict) -> float:
+    async def _assess_content_credibility(self, processed_doc: Dict, token_tracker=None, tracking_id: str = None) -> float:
         """Assess credibility based on content characteristics"""
         try:
             content = processed_doc.get("extracted_content", {}).get("content", "")
@@ -138,7 +138,7 @@ class CredibilityAssessor:
                                 if indicator.lower() in content.lower())
             score += min(0.3, indicator_count * 0.05)
             
-            if await self._has_professional_language(content):
+            if await self._has_professional_language(content, token_tracker, tracking_id):
                 score += 0.1
             
             if self._has_proper_citations(content):
@@ -155,7 +155,7 @@ class CredibilityAssessor:
             logger.error(f"Error assessing content credibility: {e}")
             return 0.5
     
-    async def _has_professional_language(self, content: str) -> bool:
+    async def _has_professional_language(self, content: str, token_tracker=None, tracking_id: str = None) -> bool:
         """Check if content uses professional financial language"""
         try:
             prompt = f"""
@@ -178,6 +178,23 @@ class CredibilityAssessor:
                 temperature=0.1,
                 max_tokens=10
             )
+            
+            # Track token usage for credibility assessment
+            if token_tracker and tracking_id and hasattr(response, 'usage'):
+                try:
+                    await token_tracker.update_usage(
+                        tracking_id=tracking_id,
+                        model_name=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
+                        deployment_name=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
+                        prompt_tokens=response.usage.prompt_tokens,
+                        completion_tokens=response.usage.completion_tokens,
+                        total_tokens=response.usage.total_tokens,
+                        input_text=prompt[:200] + "..." if len(prompt) > 200 else prompt,
+                        output_text=response.choices[0].message.content
+                    )
+                    logger.debug(f"Credibility assessment token usage tracked: {response.usage.total_tokens} tokens")
+                except Exception as tracking_error:
+                    logger.error(f"Failed to track credibility assessment token usage: {tracking_error}")
             
             score = int(response.choices[0].message.content.strip())
             return score >= 7
@@ -234,7 +251,7 @@ class CredibilityAssessor:
             logger.error(f"Error assessing metadata credibility: {e}")
             return 0.5
     
-    async def _assess_internal_consistency(self, processed_doc: Dict) -> float:
+    async def _assess_internal_consistency(self, processed_doc: Dict, token_tracker=None, tracking_id: str = None) -> float:
         """Assess internal consistency of the document"""
         try:
             chunks = processed_doc.get("chunks", [])
@@ -250,7 +267,7 @@ class CredibilityAssessor:
                 chunk1 = sample_chunks[i]["content"]
                 chunk2 = sample_chunks[i + 1]["content"]
                 
-                consistency = await self._check_chunk_consistency(chunk1, chunk2)
+                consistency = await self._check_chunk_consistency(chunk1, chunk2, token_tracker, tracking_id)
                 consistency_scores.append(consistency)
             
             if consistency_scores:
@@ -262,7 +279,7 @@ class CredibilityAssessor:
             logger.error(f"Error assessing internal consistency: {e}")
             return 0.7
     
-    async def _check_chunk_consistency(self, chunk1: str, chunk2: str) -> float:
+    async def _check_chunk_consistency(self, chunk1: str, chunk2: str, token_tracker=None, tracking_id: str = None) -> float:
         """Check consistency between two content chunks"""
         try:
             prompt = f"""
@@ -289,6 +306,23 @@ class CredibilityAssessor:
                 temperature=0.1,
                 max_tokens=10
             )
+            
+            # Track token usage for chunk consistency check
+            if token_tracker and tracking_id and hasattr(response, 'usage'):
+                try:
+                    await token_tracker.update_usage(
+                        tracking_id=tracking_id,
+                        model_name=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
+                        deployment_name=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
+                        prompt_tokens=response.usage.prompt_tokens,
+                        completion_tokens=response.usage.completion_tokens,
+                        total_tokens=response.usage.total_tokens,
+                        input_text=prompt[:200] + "..." if len(prompt) > 200 else prompt,
+                        output_text=response.choices[0].message.content
+                    )
+                    logger.debug(f"Chunk consistency token usage tracked: {response.usage.total_tokens} tokens")
+                except Exception as tracking_error:
+                    logger.error(f"Failed to track chunk consistency token usage: {tracking_error}")
             
             score = float(response.choices[0].message.content.strip())
             return max(0.0, min(1.0, score))

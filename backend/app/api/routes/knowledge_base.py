@@ -289,11 +289,14 @@ async def search_knowledge_base(
         if not azure_manager:
             raise HTTPException(status_code=500, detail="Azure services not initialized")
         
-        # Initialize token tracking for this request
-        from app.services.token_usage_tracker import TokenUsageTracker
-        token_tracker = TokenUsageTracker()
-        tracking_id = await token_tracker.start_tracking(
-            operation_type="knowledge_base_search",
+        # Initialize token tracking for this request with azure manager
+        from app.services.token_usage_tracker import TokenUsageTracker, ServiceType, OperationType
+        token_tracker = TokenUsageTracker(azure_manager=azure_manager)
+        tracking_id = token_tracker.start_tracking(
+            session_id=f"kb_search_{hash(query)}",
+            service_type=ServiceType.KNOWLEDGE_BASE,
+            operation_type=OperationType.SEARCH_QUERY,
+            endpoint="/knowledge-base/search",
             user_id=request.headers.get("X-User-ID", "anonymous"),
             metadata={"query": query, "limit": limit}
         )
@@ -312,8 +315,16 @@ async def search_knowledge_base(
             if document_type:
                 results = [r for r in results if r.get('document_type') == document_type]
             
-            # Finalize tracking
-            await token_tracker.finalize_tracking(tracking_id)
+            # Finalize tracking with success
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=True,
+                http_status_code=200,
+                metadata={
+                    "results_count": len(results),
+                    "search_operation": "hybrid_search"
+                }
+            )
             
             return {
                 "query": query,
@@ -321,7 +332,12 @@ async def search_knowledge_base(
                 "total_count": len(results)
             }
         except Exception as e:
-            await token_tracker.finalize_tracking(tracking_id, error=str(e))
+            await token_tracker.finalize_tracking(
+                tracking_id=tracking_id,
+                success=False,
+                http_status_code=500,
+                error_message=str(e)
+            )
             raise
             
     except Exception as e:

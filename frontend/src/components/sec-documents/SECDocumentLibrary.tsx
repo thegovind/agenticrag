@@ -5,8 +5,20 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { FileText, Calendar, Eye, RefreshCw, Search, Filter } from 'lucide-react';
+import { FileText, Calendar, Eye, RefreshCw, Search, Filter, Trash2, AlertTriangle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { apiService } from '@/services/api';
 
 interface SECDocument {
   document_id: string;
@@ -36,7 +48,8 @@ interface SECDocumentLibraryProps {
 const SECDocumentLibrary: React.FC<SECDocumentLibraryProps> = ({ onViewChunks }) => {
   const [documents, setDocuments] = useState<SECDocument[]>([]);
   const [filteredDocuments, setFilteredDocuments] = useState<SECDocument[]>([]);
-  const [loading, setLoading] = useState(false);  const [selectedCompany, setSelectedCompany] = useState<string>('all');
+  const [loading, setLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState<string | null>(null);  const [selectedCompany, setSelectedCompany] = useState<string>('all');
   const [selectedFormType, setSelectedFormType] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [availableCompanies, setAvailableCompanies] = useState<string[]>([]);
@@ -127,6 +140,14 @@ const SECDocumentLibrary: React.FC<SECDocumentLibraryProps> = ({ onViewChunks })
     console.log('Document Library: Final filtered documents:', filtered.length);
     setFilteredDocuments(filtered);
   };
+
+  // Calculate filtered stats based on currently visible documents
+  const filteredStats = {
+    count: filteredDocuments.length,
+    chunks: filteredDocuments.reduce((sum, doc) => sum + (doc.chunk_count || 0), 0),
+    companies: [...new Set(filteredDocuments.map(doc => doc.company).filter(Boolean))].length,
+    formTypes: [...new Set(filteredDocuments.map(doc => doc.form_type).filter(Boolean))].length
+  };
   const clearFilters = () => {
     setSelectedCompany('all');
     setSelectedFormType('all');
@@ -150,6 +171,35 @@ const SECDocumentLibrary: React.FC<SECDocumentLibraryProps> = ({ onViewChunks })
     }
   };
 
+  const handleDeleteDocument = async (document: SECDocument) => {
+    setDeleteLoading(document.document_id);
+    try {
+      console.log('Deleting document:', document.document_id);
+      
+      const result = await apiService.deleteSECDocument(document.document_id);
+      
+      console.log('Delete result:', result);
+      
+      // Remove the document from the local state
+      setDocuments(prev => prev.filter(doc => doc.document_id !== document.document_id));
+      
+      toast({
+        title: "Document Deleted",
+        description: `Successfully deleted ${document.company} ${document.form_type} (${result.chunks_deleted} chunks)`,
+      });
+      
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      toast({
+        title: "Delete Failed",
+        description: `Failed to delete document: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        variant: "destructive",
+      });
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header with stats */}
@@ -161,25 +211,38 @@ const SECDocumentLibrary: React.FC<SECDocumentLibraryProps> = ({ onViewChunks })
           </CardTitle>
           <CardDescription>
             Browse and analyze SEC documents in the vector store
+            {(selectedCompany !== 'all' || selectedFormType !== 'all' || searchTerm) && (
+              <span className="text-blue-600 font-medium">
+                {' '}• Filtered results shown
+              </span>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600">{totalStats.count}</div>
-              <div className="text-sm text-muted-foreground">Total Documents</div>
+              <div className="text-2xl font-bold text-blue-600">{filteredStats.count}</div>
+              <div className="text-sm text-muted-foreground">
+                {selectedCompany !== 'all' || selectedFormType !== 'all' || searchTerm ? 'Filtered' : 'Total'} Documents
+              </div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-green-600">{totalStats.chunks}</div>
-              <div className="text-sm text-muted-foreground">Total Chunks</div>
+              <div className="text-2xl font-bold text-green-600">{filteredStats.chunks}</div>
+              <div className="text-sm text-muted-foreground">
+                {selectedCompany !== 'all' || selectedFormType !== 'all' || searchTerm ? 'Filtered' : 'Total'} Chunks
+              </div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-purple-600">{availableCompanies.length}</div>
-              <div className="text-sm text-muted-foreground">Companies</div>
+              <div className="text-2xl font-bold text-purple-600">{filteredStats.companies}</div>
+              <div className="text-sm text-muted-foreground">
+                {selectedCompany !== 'all' || selectedFormType !== 'all' || searchTerm ? 'Filtered' : 'Available'} Companies
+              </div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-orange-600">{availableFormTypes.length}</div>
-              <div className="text-sm text-muted-foreground">Form Types</div>
+              <div className="text-2xl font-bold text-orange-600">{filteredStats.formTypes}</div>
+              <div className="text-sm text-muted-foreground">
+                {selectedCompany !== 'all' || selectedFormType !== 'all' || searchTerm ? 'Filtered' : 'Available'} Form Types
+              </div>
             </div>
           </div>
         </CardContent>
@@ -279,15 +342,65 @@ const SECDocumentLibrary: React.FC<SECDocumentLibraryProps> = ({ onViewChunks })
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onViewChunks?.(document.document_id)}
-                        className="gap-2"
-                      >
-                        <Eye className="h-4 w-4" />
-                        View Chunks
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                              disabled={deleteLoading === document.document_id}
+                            >
+                              {deleteLoading === document.document_id ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                              Delete
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle className="flex items-center gap-2">
+                                <AlertTriangle className="h-5 w-5 text-red-500" />
+                                Delete Document
+                              </AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to delete this document? This will permanently remove:
+                                <br />
+                                <br />
+                                <strong>{document.company} - {document.form_type}</strong>
+                                <br />
+                                • Document ID: {document.document_id}
+                                <br />
+                                • {document.chunk_count} chunks from the vector store
+                                <br />
+                                <br />
+                                This action cannot be undone.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => handleDeleteDocument(document)}
+                                className="bg-red-600 hover:bg-red-700"
+                              >
+                                Delete Document
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                        
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onViewChunks?.(document.document_id)}
+                          className="gap-2"
+                        >
+                          <Eye className="h-4 w-4" />
+                          View Chunks
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

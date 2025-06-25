@@ -45,9 +45,7 @@ const SECDocumentsManager: React.FC = () => {
             </div>
           </div>
         </CardHeader>
-      </Card>
-
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      </Card>      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="search" className="flex items-center gap-2">
             <Search className="h-4 w-4" />
@@ -72,14 +70,12 @@ const SECDocumentsManager: React.FC = () => {
             <CardContent className="pt-6">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Info className="h-4 w-4" />
-                Search for SEC filings and process them into the vector store. Documents are automatically chunked and embedded for intelligent search.
+                Search for SEC filings and process them into the vector store with parallel processing and real-time progress tracking.
               </div>
             </CardContent>
           </Card>
           <SECDocumentSearch />
-        </TabsContent>
-
-        <TabsContent value="library" className="mt-6">
+        </TabsContent>        <TabsContent value="library" className="mt-6">
           <Card className="mb-4">
             <CardContent className="pt-6">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">

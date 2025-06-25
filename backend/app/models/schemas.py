@@ -249,3 +249,96 @@ class PerformanceMetrics(BaseModel):
     time_saved_minutes: float = Field(ge=0, description="Total time saved vs manual research")
     session_id: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+class ProcessingStage(str, Enum):
+    QUEUED = "queued"
+    DOWNLOADING = "downloading"
+    PARSING = "parsing"
+    CHUNKING = "chunking"
+    EMBEDDING = "embedding"
+    INDEXING = "indexing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class DocumentProcessingProgress(BaseModel):
+    document_id: str
+    ticker: str
+    accession_number: str
+    stage: ProcessingStage
+    progress_percent: float = Field(ge=0, le=100, description="Progress percentage for current stage")
+    message: str = ""
+    started_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    chunks_created: int = 0
+    tokens_used: int = 0
+    
+class BatchProcessingStatus(BaseModel):
+    batch_id: str
+    total_documents: int
+    completed_documents: int
+    failed_documents: int
+    current_processing: List[DocumentProcessingProgress]
+    overall_progress_percent: float = Field(ge=0, le=100)
+    started_at: datetime
+    estimated_completion: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    status: str = "processing"  # "processing", "completed", "failed"
+    error_message: Optional[str] = None
+
+# SEC Document Processing Models
+class ProcessDocumentRequest(BaseModel):
+    ticker: str
+    accession_number: str
+    document_id: Optional[str] = None
+
+class ProcessDocumentResponse(BaseModel):
+    document_id: str
+    chunks_created: int
+    metadata: Dict[str, Any]
+    filing_info: Dict[str, Any]
+    skipped: Optional[bool] = False
+    processing_time_seconds: Optional[float] = None
+    tokens_used: Optional[int] = None
+    
+class ProcessMultipleDocumentsRequest(BaseModel):
+    filings: List[ProcessDocumentRequest]
+    batch_id: Optional[str] = Field(default_factory=lambda: str(__import__('uuid').uuid4()))
+    max_parallel: int = Field(default=3, ge=1, le=10, description="Maximum parallel processing threads")
+    
+class ProcessMultipleDocumentsResponse(BaseModel):
+    batch_id: str
+    results: List[ProcessDocumentResponse]
+    summary: Dict[str, Any]
+    processing_time_seconds: float
+    total_chunks_created: int
+    total_tokens_used: int
+
+# SEC Document Library and Analytics Models
+class SECDocumentLibraryResponse(BaseModel):
+    documents: List[Dict[str, Any]]
+    total_count: int
+    total_chunks: int
+    companies: List[str]
+    form_types: List[str]
+
+class SECAnalyticsResponse(BaseModel):
+    total_documents: int
+    total_chunks: int
+    companies_count: int
+    form_types_distribution: Dict[str, int]
+    chunks_per_document_avg: float
+    recent_activity: List[Dict[str, Any]]
+    company_distribution: Dict[str, int]
+    filing_date_range: Dict[str, str]
+
+class ChunkVisualizationResponse(BaseModel):
+    document_id: str
+    document_info: Dict[str, Any]
+    chunks: List[Dict[str, Any]]
+    chunk_stats: Dict[str, Any]
+
+class SECFilingsRequest(BaseModel):
+    ticker: str
+    limit: Optional[int] = 10
