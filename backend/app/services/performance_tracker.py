@@ -239,6 +239,10 @@ class PerformanceTracker:
     def get_reasoning_chain(self, question_id: str) -> Optional[ReasoningChain]:
         """Get the reasoning chain for a question"""
         return self.reasoning_chains.get(question_id)
+    
+    def get_performance_benchmark(self, question_id: str) -> Optional[PerformanceBenchmark]:
+        """Get the performance benchmark for a specific question"""
+        return self.benchmarks.get(question_id)
 
 # Global instance
 performance_tracker = PerformanceTracker()

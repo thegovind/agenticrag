@@ -475,7 +475,10 @@ class AzureServiceManager:
                 )
             )
             
-            semantic_search = SemanticSearch(configurations=[semantic_config])
+            semantic_search = SemanticSearch(
+                configurations=[semantic_config],
+                default_configuration_name="default-semantic-config"
+            )
               # Create the index
             index = SearchIndex(
                 name=settings.AZURE_SEARCH_INDEX_NAME,

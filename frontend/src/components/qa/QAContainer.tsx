@@ -3,6 +3,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { QuestionInput } from './QuestionInput';
 import { AnswerDisplay } from './AnswerDisplay';
 import { SourceVerification } from './SourceVerificationModal';
@@ -18,6 +19,7 @@ export interface QAQuestion {
   question: string;
   timestamp: Date;
   verificationLevel: 'basic' | 'thorough' | 'comprehensive';
+  backendQuestionId?: string; // Store the backend's question_id once we get the response
 }
 
 export interface QAAnswer {
@@ -74,6 +76,7 @@ export interface QAAnswer {
     agentServiceUsed?: boolean;
     agentId?: string;
     threadId?: string;
+    rag_method?: string;
   };
 }
 
@@ -123,10 +126,13 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
   const [showAgentStatus, setShowAgentStatus] = useState(false);
   const [agentServiceConnected, setAgentServiceConnected] = useState(false);
   const [credibilityCheckEnabled, setCredibilityCheckEnabled] = useState(false); // Off by default
-  const [showPerformanceDashboard, setShowPerformanceDashboard] = useState(false);
+  const [ragMethod, setRagMethod] = useState<'agent' | 'traditional' | 'llamaindex' | 'agentic-vector'>('agent'); // Default to current implementation
   const [showReasoningChain, setShowReasoningChain] = useState(false);
   const [sessionMetrics, setSessionMetrics] = useState<any>(null);
   const [selectedReasoningChain, setSelectedReasoningChain] = useState<any>(null);
+  const [showOverallPerformance, setShowOverallPerformance] = useState(false);
+  const [selectedQuestionPerformance, setSelectedQuestionPerformance] = useState<any>(null);
+  const [showQuestionPerformance, setShowQuestionPerformance] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -181,10 +187,11 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
         embedding_model: modelSettings.embeddingModel,
         temperature: modelSettings.temperature,
         credibility_check_enabled: credibilityCheckEnabled, // Pass the toggle state
+        rag_method: ragMethod, // Pass the selected RAG method
       });
         const qaAnswer: QAAnswer = {
         id: (Date.now() + 1).toString(),
-        questionId: qaQuestion.id,
+        questionId: data.question_id, // Use the backend's question_id instead of qaQuestion.id
         answer: data.answer,
         confidenceScore: data.confidence_score || 0.8,
         timestamp: new Date(),
@@ -206,10 +213,18 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
           agentServiceUsed: data.metadata?.agent_service_used || agentServiceConnected,
           agentId: data.verification_details?.agent_id,
           threadId: data.verification_details?.thread_id,
+          rag_method: ragMethod, // Add the RAG method used for this answer
         },
       };
 
       setAnswers(prev => [...prev, qaAnswer]);
+      
+      // Update the question with the backend's question_id for proper matching
+      setQuestions(prev => prev.map(q => 
+        q.id === qaQuestion.id 
+          ? { ...q, backendQuestionId: data.question_id }
+          : q
+      ));
     } catch (error) {
       console.error('Error processing QA request:', error);
       const errorAnswer: QAAnswer = {
@@ -294,12 +309,14 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     setShowSourceVerificationModal(false);
     setShowQuestionDecomposition(false);
     setShowAgentStatus(false);
-    setShowPerformanceDashboard(false);
+    setShowOverallPerformance(false);
+    setShowQuestionPerformance(false);
     setShowReasoningChain(false);
     setVerifiedSources([]);
     setDecomposedQuestions(null);
     setSessionMetrics(null);
     setSelectedReasoningChain(null);
+    setSelectedQuestionPerformance(null);
     setIsVerifyingSourcesForAnswer(null);
   };
 
@@ -311,32 +328,46 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     checkAgentServiceStatus();
   };
 
-  const handleShowPerformanceDashboard = async () => {
-    setShowPerformanceDashboard(!showPerformanceDashboard);
-    if (!showPerformanceDashboard) {
+  const handleShowOverallPerformance = async () => {
+    setShowOverallPerformance(!showOverallPerformance);
+    setShowQuestionPerformance(false); // Close question-specific if open
+    if (!showOverallPerformance) {
       try {
         const metrics = await apiService.getPerformanceMetrics(currentSessionId);
         setSessionMetrics(metrics);
       } catch (error) {
-        console.error('Error fetching performance metrics:', error);
+        console.error('Error fetching overall performance metrics:', error);
       }
     }
   };
 
+  const handleShowQuestionPerformance = async (questionId: string) => {
+    try {
+      const questionMetrics = await apiService.getQuestionPerformanceMetrics(questionId);
+      setSelectedQuestionPerformance(questionMetrics);
+      setShowQuestionPerformance(true);
+      setShowOverallPerformance(false); // Close overall if open
+    } catch (error) {
+      console.error('Error fetching question performance metrics:', error);
+    }
+  };
+
+  const handleCloseQuestionPerformance = () => {
+    setShowQuestionPerformance(false);
+    setSelectedQuestionPerformance(null);
+  };
+
   const handleShowReasoningChain = async (questionId: string) => {
     try {
+      console.log('Fetching reasoning chain for question_id:', questionId);
       const reasoningChain = await apiService.getReasoningChain(questionId);
+      console.log('Received reasoning chain:', reasoningChain);
+      console.log('Reasoning steps:', reasoningChain?.reasoning_steps);
       setSelectedReasoningChain(reasoningChain);
       setShowReasoningChain(true);
     } catch (error) {
       console.error('Error fetching reasoning chain:', error);
     }
-  };
-
-  const getCurrentAnswerBenchmark = () => {
-    if (answers.length === 0) return undefined;
-    const latestAnswer = answers[answers.length - 1];
-    return latestAnswer.performanceBenchmark;
   };
 
   return (
@@ -347,7 +378,10 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
             <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
               <div className="space-y-6">
                 {questions.map((question, index) => {
-                  const answer = answers.find(a => a.questionId === question.id);
+                  // Match answers using either the backend question_id or fallback to frontend id
+                  const answer = answers.find(a => 
+                    a.questionId === (question.backendQuestionId || question.id)
+                  );
                   return (
                     <div key={question.id} className="space-y-4">
                       <div className="bg-muted/50 p-4 rounded-lg">
@@ -372,6 +406,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                           answer={answer}
                           onVerifySources={() => handleVerifySources(answer)}
                           onShowReasoningChain={answer.reasoningChain ? () => handleShowReasoningChain(answer.reasoningChain?.question_id || '') : undefined}
+                          onShowPerformance={answer.questionId ? () => handleShowQuestionPerformance(answer.questionId) : undefined}
                           isVerifyingSources={isVerifyingSourcesForAnswer === answer.id}
                           credibilityCheckEnabled={credibilityCheckEnabled}
                         />
@@ -416,12 +451,36 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                   Agent Status
                 </button>
                 
-                <button
-                  onClick={handleShowPerformanceDashboard}
-                  className="px-3 py-1 text-sm bg-blue-100 text-blue-800 border border-blue-200 rounded-md hover:opacity-80"
-                >
-                  Performance
-                </button>
+                {/* RAG Method Selection */}
+                <div className="flex items-center space-x-2">
+                  <Label htmlFor="rag-method" className="text-xs text-muted-foreground">
+                    RAG Method:
+                  </Label>
+                  <Select value={ragMethod} onValueChange={(value: 'agent' | 'traditional' | 'llamaindex' | 'agentic-vector') => setRagMethod(value)}>
+                    <SelectTrigger className="w-32 h-7 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="agent">Agent</SelectItem>
+                      <SelectItem value="traditional">Traditional RAG</SelectItem>
+                      <SelectItem value="llamaindex">LlamaIndex</SelectItem>
+                      <SelectItem value="agentic-vector">Agentic Vector</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  
+                  {/* Overall Performance Button */}
+                  <button
+                    onClick={handleShowOverallPerformance}
+                    className={`px-3 py-1 text-sm rounded-md hover:opacity-80 ${
+                      showOverallPerformance 
+                        ? 'bg-blue-100 text-blue-800 border border-blue-200' 
+                        : 'bg-gray-100 text-gray-800 border border-gray-200'
+                    }`}
+                    title="Show overall session performance metrics"
+                  >
+                    📊 Session Performance
+                  </button>
+                </div>
                 
                 {/* Credibility Check Toggle */}
                 <div className="flex items-center space-x-2 ml-4">
@@ -452,7 +511,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
             </div>
           </div>
         </ResizablePanel>
-          {(showQuestionDecomposition || showAgentStatus || showPerformanceDashboard || showReasoningChain) && (
+          {(showQuestionDecomposition || showAgentStatus || showOverallPerformance || showQuestionPerformance || showReasoningChain) && (
           <>
             <ResizableHandle />
             <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
@@ -481,21 +540,40 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                 </div>
               )}
               
-              {showPerformanceDashboard && (
+              {/* Overall Performance Modal */}
+              {showOverallPerformance && (
                 <div className="p-4">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-medium">Performance Analytics</h3>
+                    <h3 className="text-sm font-medium">📊 Session Performance Analytics</h3>
                     <button
-                      onClick={() => setShowPerformanceDashboard(false)}
+                      onClick={() => setShowOverallPerformance(false)}
                       className="text-xs text-muted-foreground hover:text-foreground"
                     >
                       ✕ Close
                     </button>
                   </div>
                   <PerformanceDashboard
-                    benchmark={getCurrentAnswerBenchmark()}
                     sessionMetrics={sessionMetrics}
-                    isVisible={showPerformanceDashboard}
+                    isVisible={showOverallPerformance}
+                  />
+                </div>
+              )}
+              
+              {/* Question-Specific Performance Modal */}
+              {showQuestionPerformance && selectedQuestionPerformance && (
+                <div className="p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium">📈 Question Performance</h3>
+                    <button
+                      onClick={handleCloseQuestionPerformance}
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      ✕ Close
+                    </button>
+                  </div>
+                  <PerformanceDashboard
+                    benchmark={selectedQuestionPerformance}
+                    isVisible={showQuestionPerformance}
                   />
                 </div>
               )}

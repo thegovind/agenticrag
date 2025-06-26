@@ -41,6 +41,17 @@ export const ReasoningChainDisplay: React.FC<ReasoningChainDisplayProps> = ({
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set([1])); // Expand first step by default
 
   if (!isVisible) return null;
+  
+  // Add debugging and error handling
+  if (!reasoningChain) {
+    console.error('ReasoningChainDisplay: reasoningChain is null or undefined');
+    return <div>Error: No reasoning chain data available</div>;
+  }
+  
+  if (!reasoningChain.reasoning_steps) {
+    console.error('ReasoningChainDisplay: reasoning_steps is undefined', reasoningChain);
+    return <div>Error: No reasoning steps available</div>;
+  }
 
   const getActionIcon = (actionType: string) => {
     switch (actionType.toLowerCase()) {
@@ -101,7 +112,8 @@ export const ReasoningChainDisplay: React.FC<ReasoningChainDisplayProps> = ({
   };
 
   const calculateStepProgress = (stepIndex: number): number => {
-    return ((stepIndex + 1) / reasoningChain.reasoning_steps.length) * 100;
+    const totalSteps = reasoningChain.reasoning_steps?.length || 1;
+    return ((stepIndex + 1) / totalSteps) * 100;
   };
 
   return (
@@ -129,7 +141,7 @@ export const ReasoningChainDisplay: React.FC<ReasoningChainDisplayProps> = ({
           <div className="grid grid-cols-3 gap-4 text-center">
             <div className="space-y-1">
               <div className="text-xs text-muted-foreground">Total Steps</div>
-              <div className="text-lg font-semibold">{reasoningChain.reasoning_steps.length}</div>
+              <div className="text-lg font-semibold">{reasoningChain.reasoning_steps?.length || 0}</div>
             </div>
             <div className="space-y-1">
               <div className="text-xs text-muted-foreground">Total Time</div>
@@ -147,7 +159,7 @@ export const ReasoningChainDisplay: React.FC<ReasoningChainDisplayProps> = ({
 
       {/* Reasoning Steps */}
       <div className="space-y-3">
-        {reasoningChain.reasoning_steps.map((step, index) => (
+        {(reasoningChain.reasoning_steps || []).map((step, index) => (
           <Card key={step.step_number} className="relative">
             <Collapsible
               open={expandedSteps.has(step.step_number)}
@@ -261,7 +273,7 @@ export const ReasoningChainDisplay: React.FC<ReasoningChainDisplayProps> = ({
           <div className="text-sm space-y-2">
             <div className="font-medium text-foreground">Process Summary:</div>
             <div className="text-muted-foreground">
-              The AI completed <strong>{reasoningChain.reasoning_steps.length} reasoning steps</strong> in{' '}
+              The AI completed <strong>{reasoningChain.reasoning_steps?.length || 0} reasoning steps</strong> in{' '}
               <strong>{formatDuration(reasoningChain.total_duration_ms)}</strong>, achieving{' '}
               <strong className={getConfidenceColor(reasoningChain.final_confidence)}>
                 {(reasoningChain.final_confidence * 100).toFixed(0)}% confidence

@@ -12,6 +12,22 @@ class Settings(BaseSettings):
     AZURE_SEARCH_API_VERSION: str = os.getenv("AZURE_SEARCH_API_VERSION", "2023-11-01")
     AZURE_SEARCH_API_KEY: str = os.getenv("AZURE_SEARCH_API_KEY", "")
     
+    # Additional Azure AI Search configurations for Agentic RAG
+    AZURE_SEARCH_AGENT_NAME: str = os.getenv("AZURE_SEARCH_AGENT_NAME", "financial-qa-agent")
+    AZURE_OPENAI_CHAT_MODEL_NAME: str = os.getenv("AZURE_OPENAI_CHAT_MODEL_NAME", "gpt-4o-mini")
+    
+    @property
+    def AZURE_AI_SEARCH_ENDPOINT(self) -> str:
+        """Compute Azure AI Search endpoint from service name"""
+        if self.AZURE_SEARCH_SERVICE_NAME:
+            return f"https://{self.AZURE_SEARCH_SERVICE_NAME}.search.windows.net"
+        return ""
+    
+    @property 
+    def AZURE_AI_SEARCH_INDEX_NAME(self) -> str:
+        """Alias for backward compatibility"""
+        return self.AZURE_SEARCH_INDEX_NAME
+    
     AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     AZURE_OPENAI_API_KEY: str = os.getenv("AZURE_OPENAI_API_KEY", "")
     AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
@@ -27,10 +43,16 @@ class Settings(BaseSettings):
     AVAILABLE_CHAT_MODELS: List[str] = [
         "gpt-4",
         "gpt-4-turbo",
+        "gpt-4o",  # Supported for agentic retrieval
+        "gpt-4o-mini",  # Supported for agentic retrieval
+        "gpt-4.1",  # Supported for agentic retrieval
+        "gpt-4.1-nano",  # Supported for agentic retrieval
+        "gpt-4.1-mini",  # Supported for agentic retrieval
         "gpt-35-turbo",
         "financial-llm",  # Industry specific
         "grok-beta",
-        "deepseek-chat"    ]
+        "deepseek-chat"
+    ]
     
     AZURE_COSMOS_ENDPOINT: str = os.getenv("AZURE_COSMOS_ENDPOINT", "")
     AZURE_COSMOS_DATABASE_NAME: str = os.getenv("AZURE_COSMOS_DATABASE_NAME", "rag-financial-db")

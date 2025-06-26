@@ -223,9 +223,12 @@ class ApiService {
     chat_model?: string;
     embedding_model?: string;
     temperature?: number;
-    credibility_check_enabled?: boolean;  }): Promise<{
+    credibility_check_enabled?: boolean;
+    rag_method?: 'agent' | 'traditional' | 'llamaindex' | 'agentic-vector';
+  }): Promise<{
     answer: string;
     session_id: string;
+    question_id: string;
     confidence_score: number;
     citations: any[];
     sub_questions: string[];
@@ -417,6 +420,10 @@ class ApiService {
     return this.makeRequest(`/sec/documents/${documentId}`, {
       method: 'DELETE'
     });
+  }
+
+  async getQuestionPerformanceMetrics(questionId: string): Promise<any> {
+    return this.makeRequest(`/qa/performance-metrics/question/${questionId}`);
   }
 }
 

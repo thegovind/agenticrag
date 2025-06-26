@@ -47,3 +47,5 @@ markdownify==0.12.1
 azure-ai-projects
 azure-monitor-opentelemetry==1.6.7
 opentelemetry-instrumentation-openai-v2
+
+azure-search-documents==11.6.0b12

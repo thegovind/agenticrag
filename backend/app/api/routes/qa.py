@@ -23,6 +23,8 @@ from app.services.azure_ai_agent_service import AzureAIAgentService
 from app.services.azure_services import AzureServiceManager
 from app.services.token_usage_tracker import TokenUsageTracker, ServiceType, OperationType
 from app.services.performance_tracker import performance_tracker
+from app.services.traditional_rag_service import TraditionalRAGService
+from app.services.agentic_vector_rag_service import AgenticVectorRAGService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -128,26 +130,60 @@ async def ask_question(
             )
             logger.info(f"Started separate embedding tracking session: {embedding_tracking_id}")
             
-            qa_result = await azure_ai_agent_service.process_qa_request(
-                question=request.question,
-                context={
-                    **(request.context or {}),
-                    'kb_manager': kb_manager,
-                    'credibility_check_enabled': request.credibility_check_enabled,
-                    'token_tracker': token_tracker,
-                    'tracking_id': tracking_id,
-                    'embedding_tracking_id': embedding_tracking_id,  # Pass separate embedding tracking ID
-                    'performance_tracker': performance_tracker,
-                    'question_id': question_id
-                },
-                verification_level=request.verification_level,
-                session_id=session_id,
-                model_config={
-                    "chat_model": request.chat_model,
-                    "embedding_model": request.embedding_model,
-                    "temperature": request.temperature
-                }
-            )
+            logger.info(f"Using RAG method: {request.rag_method}")
+            
+            # Route to appropriate RAG implementation
+            if request.rag_method == "traditional":
+                logger.info("Processing with Traditional RAG...")
+                qa_result = await process_with_traditional_rag(
+                    request=request,
+                    azure_manager=azure_manager,
+                    session_id=session_id,
+                    token_tracker=token_tracker,
+                    tracking_id=tracking_id,
+                    embedding_tracking_id=embedding_tracking_id,
+                    question_id=question_id
+                )
+            elif request.rag_method == "llamaindex":
+                # Placeholder for LlamaIndex implementation
+                logger.info("LlamaIndex RAG not implemented yet, falling back to Agent")
+                qa_result = await process_with_agent_rag(
+                    request=request,
+                    azure_manager=azure_manager,
+                    kb_manager=kb_manager,
+                    orchestrator=orchestrator,
+                    session_id=session_id,
+                    token_tracker=token_tracker,
+                    tracking_id=tracking_id,
+                    embedding_tracking_id=embedding_tracking_id,
+                    question_id=question_id
+                )
+            elif request.rag_method == "agentic-vector":
+                # Process with Agentic Vector RAG implementation
+                logger.info("Processing with Agentic Vector RAG...")
+                qa_result = await process_with_agentic_vector_rag(
+                    request=request,
+                    azure_manager=azure_manager,
+                    session_id=session_id,
+                    token_tracker=token_tracker,
+                    tracking_id=tracking_id,
+                    embedding_tracking_id=embedding_tracking_id,
+                    question_id=question_id
+                )
+            else:  # default to "agent"
+                logger.info("Processing with Azure AI Agent Service...")
+                qa_result = await process_with_agent_rag(
+                    request=request,
+                    azure_manager=azure_manager,
+                    kb_manager=kb_manager,
+                    orchestrator=orchestrator,
+                    session_id=session_id,
+                    token_tracker=token_tracker,
+                    tracking_id=tracking_id,
+                    embedding_tracking_id=embedding_tracking_id,
+                    question_id=question_id
+                )
+            
             logger.info(f"QA result received: {len(qa_result.get('answer', ''))} characters")
             
             # Complete search step
@@ -175,36 +211,57 @@ async def ask_question(
             verification_details = qa_result.get("verification_details", {})
             
             citations = []
-            for source in qa_result.get("sources", []):
-                citations.append(Citation(
-                    id=source.get("id", str(uuid.uuid4())),
-                    content=source.get("content", ""),
-                    source=source.get("source", "Unknown Source"),
-                    document_id=source.get("document_id", ""),
-                    document_title=source.get("document_title", ""),
-                    page_number=source.get("page_number"),
-                    section_title=source.get("section_title"),
-                    confidence=source.get("confidence", "medium"),
-                    url=source.get("url", ""),
-                    credibility_score=source.get("credibility_score", 0.5)                ))
+            # Handle citations differently based on RAG method
+            if request.rag_method == "traditional":
+                # Traditional RAG returns citations directly
+                for citation_data in qa_result.get("citations", []):
+                    citations.append(Citation(**citation_data))
+            elif request.rag_method == "agentic-vector":
+                # Agentic Vector RAG returns properly formatted citations directly
+                logger.info(f"🔍 DEBUG: Processing {len(qa_result.get('citations', []))} citations from agentic-vector RAG")
+                for citation_data in qa_result.get("citations", []):
+                    logger.info(f"🔍 DEBUG: Citation data before processing: {citation_data}")
+                    citations.append(Citation(**citation_data))
+            else:
+                # Agent RAG returns sources that need to be converted to citations
+                for source in qa_result.get("sources", []):
+                    citations.append(Citation(
+                        id=source.get("id", str(uuid.uuid4())),
+                        content=source.get("content", ""),
+                        source=source.get("source", "Unknown Source"),
+                        document_id=source.get("document_id", ""),
+                        document_title=source.get("document_title", ""),
+                        page_number=source.get("page_number"),
+                        section_title=source.get("section_title"),
+                        confidence=source.get("confidence", "medium"),
+                        url=source.get("url", ""),
+                        credibility_score=source.get("credibility_score", 0.5)
+                    ))
             
-            prompt_tokens = len(request.question.split()) * 1.3
-            completion_tokens = len(answer.split()) * 1.3
-            total_tokens = int(prompt_tokens + completion_tokens)
-            
-            token_usage = {
-                "prompt_tokens": int(prompt_tokens),
-                "completion_tokens": int(completion_tokens),
-                "total_tokens": total_tokens
-            }
+            # Handle token usage differently based on RAG method
+            if request.rag_method == "traditional" and qa_result.get("metadata", {}).get("tokens_used"):
+                # Traditional RAG provides actual token usage
+                token_usage = qa_result["metadata"]["tokens_used"]
+                total_tokens = token_usage.get("total_tokens", 0)
+            else:
+                # Estimate tokens for other methods (existing logic)
+                prompt_tokens = len(request.question.split()) * 1.3
+                completion_tokens = len(answer.split()) * 1.3
+                total_tokens = int(prompt_tokens + completion_tokens)
+                
+                token_usage = {
+                    "prompt_tokens": int(prompt_tokens),
+                    "completion_tokens": int(completion_tokens),
+                    "total_tokens": total_tokens
+                }
             
             # Update token tracking with actual usage
             await token_tracker.update_usage(
                 tracking_id=tracking_id,
                 model_name=request.chat_model,
                 deployment_name=chat_deployment_used,
-                prompt_tokens=int(prompt_tokens),
-                completion_tokens=int(completion_tokens),
+                prompt_tokens=token_usage.get("prompt_tokens", 0),
+                completion_tokens=token_usage.get("completion_tokens", 0),
                 response_text=answer
             )
             
@@ -287,6 +344,9 @@ async def ask_question(
             
             # Finalize reasoning chain
             final_reasoning_chain = performance_tracker.finalize_reasoning_chain(question_id, confidence_score)
+            logger.info(f"🔍 DEBUG: Finalized reasoning chain for question_id: {question_id}")
+            logger.info(f"🔍 DEBUG: Reasoning chain object: {final_reasoning_chain}")
+            logger.info(f"🔍 DEBUG: Reasoning chain question_id: {final_reasoning_chain.question_id if final_reasoning_chain else 'None'}")
             
             # Create performance benchmark
             performance_benchmark = performance_tracker.create_performance_benchmark(
@@ -303,6 +363,7 @@ async def ask_question(
             response = QAResponse(
                 answer=answer,
                 session_id=session_id,
+                question_id=question_id,
                 confidence_score=confidence_score,
                 citations=citations,
                 sub_questions=sub_questions,
@@ -317,9 +378,13 @@ async def ask_question(
                     "verification_level": request.verification_level,
                     "evaluation_count": len(evaluation_results),
                     "avg_evaluation_score": sum(r.score for r in evaluation_results) / len(evaluation_results) if evaluation_results else 0,
-                    "response_time": response_time
+                    "response_time": response_time,
+                    "rag_method": request.rag_method  # Add RAG method to metadata
                 },
                 token_usage=token_usage)
+            
+            logger.info(f"🔍 DEBUG: Response reasoning_chain question_id: {response.reasoning_chain.question_id if response.reasoning_chain else 'None'}")
+            logger.info(f"🔍 DEBUG: Response reasoning_chain available: {response.reasoning_chain is not None}")
             
             span.set_attribute("response.tokens", total_tokens)
             span.set_attribute("response.citations", len(citations))
@@ -983,6 +1048,26 @@ async def get_performance_metrics(
         logger.error(f"Error retrieving performance metrics for session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance metrics: {str(e)}")
 
+@router.get("/performance-metrics/question/{question_id}")
+async def get_question_performance_metrics(
+    question_id: str,
+    x_user_id: Optional[str] = Header(None)
+):
+    """Get performance metrics for a specific question"""
+    try:
+        # Get the performance benchmark for this specific question
+        benchmark = performance_tracker.get_performance_benchmark(question_id)
+        if not benchmark:
+            raise HTTPException(status_code=404, detail="Performance metrics not found for this question")
+        
+        logger.info(f"Retrieved performance metrics for question {question_id}")
+        return benchmark
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving performance metrics for question {question_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve performance metrics: {str(e)}")
+
 @router.get("/reasoning-chain/{question_id}")
 async def get_reasoning_chain(
     question_id: str,
@@ -990,12 +1075,334 @@ async def get_reasoning_chain(
 ):
     """Get the reasoning chain for a specific question"""
     try:
+        logger.info(f"Getting reasoning chain for question_id: {question_id}")
         reasoning_chain = performance_tracker.get_reasoning_chain(question_id)
+        
         if not reasoning_chain:
+            logger.warning(f"Reasoning chain not found for question_id: {question_id}")
+            logger.info(f"Available reasoning chains: {list(performance_tracker.reasoning_chains.keys())}")
             raise HTTPException(status_code=404, detail="Reasoning chain not found")
+        
+        logger.info(f"Retrieved reasoning chain for question {question_id}: {len(reasoning_chain.reasoning_steps)} steps")
+        logger.info(f"Reasoning chain data: question_id={reasoning_chain.question_id}, steps={len(reasoning_chain.reasoning_steps)}")
+        
+        # Return the reasoning chain directly to match frontend expectations
         return reasoning_chain
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error retrieving reasoning chain for question {question_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve reasoning chain: {str(e)}")
+
+@router.get("/traditional-rag/diagnose")
+async def diagnose_traditional_rag():
+    """Diagnostic endpoint for Traditional RAG service"""
+    try:
+        logger.info("Running Traditional RAG diagnostics...")
+        
+        # Initialize services
+        azure_manager = AzureServiceManager()
+        await azure_manager.initialize()
+        
+        traditional_rag = TraditionalRAGService(azure_manager)
+        await traditional_rag.initialize()
+        
+        # Run diagnostics
+        results = await traditional_rag.diagnose_knowledge_base()
+        
+        return {
+            "status": "success",
+            "diagnostics": results,
+            "message": "Traditional RAG diagnostic completed"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in Traditional RAG diagnostics: {e}")
+        raise HTTPException(status_code=500, detail=f"Diagnostic failed: {str(e)}")
+
+@router.get("/agentic-vector-rag/diagnose")
+async def diagnose_agentic_vector_rag():
+    """Diagnostic endpoint for Agentic Vector RAG service"""
+    try:
+        logger.info("Running Agentic Vector RAG diagnostics...")
+        
+        # Initialize services
+        azure_manager = AzureServiceManager()
+        await azure_manager.initialize()
+        
+        agentic_vector_rag = AgenticVectorRAGService(azure_manager)
+        await agentic_vector_rag.initialize()
+        
+        # Run diagnostics
+        results = await agentic_vector_rag.get_diagnostics()
+        
+        return {
+            "status": "success",
+            "diagnostics": results,
+            "message": "Agentic Vector RAG diagnostic completed"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in Agentic Vector RAG diagnostics: {e}")
+        raise HTTPException(status_code=500, detail=f"Diagnostic failed: {str(e)}")
+
+@router.get("/diagnostic/knowledge-base")
+async def diagnostic_knowledge_base():
+    """Diagnostic endpoint to check knowledge base contents"""
+    try:
+        logger.info("Running knowledge base diagnostic...")
+        
+        # Initialize Azure manager
+        azure_manager = AzureServiceManager()
+        await azure_manager.initialize()
+        
+        # Try a simple wildcard search to see what's in the index
+        logger.info("Testing wildcard search...")
+        results = await azure_manager.hybrid_search(
+            query="*",
+            top_k=5,
+            min_score=0.0
+        )
+        
+        # Try searching for common financial terms
+        test_queries = ["Apple", "financial", "revenue", "SEC", "10-K"]
+        search_results = {}
+        
+        for query in test_queries:
+            logger.info(f"Testing search for: {query}")
+            search_res = await azure_manager.hybrid_search(
+                query=query,
+                top_k=3,
+                min_score=0.0
+            )
+            search_results[query] = {
+                "count": len(search_res),
+                "scores": [r.get('search_score', 0) for r in search_res] if search_res else []
+            }
+        
+        return {
+            "status": "success",
+            "total_documents_sample": len(results),
+            "sample_documents": [
+                {
+                    "document_id": r.get("document_id", "unknown"),
+                    "company": r.get("company", "unknown"),
+                    "form_type": r.get("form_type", "unknown"),
+                    "content_preview": r.get("content", "")[:200] + "..." if r.get("content") else "No content",
+                    "search_score": r.get("search_score", 0)
+                }
+                for r in results[:3]
+            ],
+            "test_search_results": search_results,
+            "message": f"Found {len(results)} documents in knowledge base"
+        }
+        
+    except Exception as e:
+        logger.error(f"Diagnostic error: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Failed to run knowledge base diagnostic"
+        }
+
+async def process_with_traditional_rag(
+    request: QARequest,
+    azure_manager: AzureServiceManager,
+    session_id: str,
+    token_tracker: TokenUsageTracker,
+    tracking_id: str,
+    embedding_tracking_id: str,
+    question_id: str
+) -> dict:
+    """Process QA request using Traditional RAG approach"""
+    logger.info("Initializing Traditional RAG service...")
+    
+    # Add reasoning step for initialization
+    step_num = performance_tracker.add_reasoning_step(
+        question_id,
+        "Initializing Traditional RAG service",
+        "initialize",
+        confidence=0.9,
+        output="Traditional RAG service initialized"
+    )
+    
+    # Initialize Traditional RAG service
+    traditional_rag = TraditionalRAGService(azure_manager)
+    await traditional_rag.initialize()
+    
+    performance_tracker.complete_reasoning_step(question_id, step_num)
+    
+    # Add reasoning step for search
+    step_num = performance_tracker.add_reasoning_step(
+        question_id,
+        "Performing traditional vector search and retrieval",
+        "search",
+        confidence=0.8,
+        output="Vector search initiated"
+    )
+    
+    # Process the question
+    result = await traditional_rag.process_question(
+        question=request.question,
+        session_id=session_id,
+        model_config={
+            "chat_model": request.chat_model,
+            "embedding_model": request.embedding_model,
+            "temperature": request.temperature
+        },
+        verification_level=request.verification_level,
+        token_tracker=token_tracker,
+        tracking_id=tracking_id,
+        credibility_check_enabled=request.credibility_check_enabled
+    )
+    
+    # Complete the search step
+    sources_found = len(result.get("sources", []))
+    citations_found = len(result.get("citations", []))
+    performance_tracker.complete_reasoning_step(
+        question_id, 
+        step_num,
+        f"Traditional search completed: {sources_found} sources, {citations_found} citations found",
+        confidence=result.get("confidence_score", 0.8)
+    )
+    
+    # Add reasoning step for answer generation if we have results
+    if result.get("answer"):
+        step_num = performance_tracker.add_reasoning_step(
+            question_id,
+            "Generating answer from traditional RAG results",
+            "generate",
+            sources_consulted=[f"Traditional source {i+1}" for i in range(sources_found)],
+            confidence=result.get("confidence_score", 0.8),
+            output="Answer generated from traditional RAG results"
+        )
+        performance_tracker.complete_reasoning_step(question_id, step_num)
+    
+    return result
+
+async def process_with_agent_rag(
+    request: QARequest,
+    azure_manager: AzureServiceManager,
+    kb_manager,
+    orchestrator,
+    session_id: str,
+    token_tracker: TokenUsageTracker,
+    tracking_id: str,
+    embedding_tracking_id: str,
+    question_id: str
+) -> dict:
+    """Process QA request using Azure AI Agent Service (existing implementation)"""
+    logger.info("Getting Azure AI Agent Service...")
+    azure_ai_agent_service = await orchestrator._get_azure_ai_agent_service()
+    
+    logger.info("Processing QA request with Azure AI Agent Service...")
+    result = await azure_ai_agent_service.process_qa_request(
+        question=request.question,
+        context={
+            **(request.context or {}),
+            'kb_manager': kb_manager,
+            'credibility_check_enabled': request.credibility_check_enabled,
+            'token_tracker': token_tracker,
+            'tracking_id': tracking_id,
+            'embedding_tracking_id': embedding_tracking_id,
+            'performance_tracker': performance_tracker,
+            'question_id': question_id
+        },
+        verification_level=request.verification_level,
+        session_id=session_id,
+        model_config={
+            "chat_model": request.chat_model,
+            "embedding_model": request.embedding_model,
+            "temperature": request.temperature
+        }
+    )
+    
+    return result
+
+async def process_with_agentic_vector_rag(
+    request: QARequest,
+    azure_manager: AzureServiceManager,
+    session_id: str,
+    token_tracker: TokenUsageTracker,
+    tracking_id: str,
+    embedding_tracking_id: str,
+    question_id: str
+) -> dict:
+    """Process QA request using Agentic Vector RAG implementation"""
+    logger.info("Initializing Agentic Vector RAG service...")
+    
+    # Add reasoning step for initialization
+    step_num = performance_tracker.add_reasoning_step(
+        question_id,
+        "Initializing Agentic Vector RAG service and knowledge agent",
+        "initialize",
+        confidence=0.9,
+        output="Agentic Vector RAG service initialized"
+    )
+    
+    # Initialize the Agentic Vector RAG service
+    agentic_vector_service = AgenticVectorRAGService(azure_manager)
+    await agentic_vector_service.initialize()
+    
+    performance_tracker.complete_reasoning_step(question_id, step_num)
+    
+    # Add reasoning step for query planning
+    step_num = performance_tracker.add_reasoning_step(
+        question_id,
+        "Performing intelligent query planning and agentic retrieval",
+        "agentic_retrieval",
+        confidence=0.85,
+        output="Query planning and parallel subquery execution initiated"
+    )
+    
+    # Build context including conversation history and performance tracking
+    context = {
+        **(request.context or {}),
+        'session_id': session_id,
+        'token_tracker': token_tracker,
+        'tracking_id': tracking_id,
+        'embedding_tracking_id': embedding_tracking_id,
+        'performance_tracker': performance_tracker,
+        'question_id': question_id,
+        'conversation_history': request.context.get('conversation_history', []) if request.context else []
+    }
+    
+    logger.info("Processing QA request with Agentic Vector RAG service...")
+    result = await agentic_vector_service.process_question(
+        question=request.question,
+        session_id=session_id,
+        model_config={
+            "chat_model": request.chat_model,
+            "embedding_model": request.embedding_model,
+            "temperature": request.temperature
+        },
+        verification_level=request.verification_level,
+        token_tracker=token_tracker,
+        tracking_id=tracking_id,
+        context=context,
+        credibility_check_enabled=request.credibility_check_enabled
+    )
+    
+    # Complete the agentic retrieval step
+    sources_found = len(result.get("sources", []))
+    citations_found = len(result.get("citations", []))
+    performance_tracker.complete_reasoning_step(
+        question_id, 
+        step_num,
+        f"Agentic retrieval completed: {sources_found} sources, {citations_found} citations found",
+        confidence=result.get("confidence_score", 0.8)
+    )
+    
+    # Add reasoning step for answer synthesis if we have results
+    if result.get("answer"):
+        step_num = performance_tracker.add_reasoning_step(
+            question_id,
+            "Synthesizing comprehensive answer from agentic retrieval results",
+            "synthesize",
+            sources_consulted=[f"Agentic source {i+1}" for i in range(sources_found)],
+            confidence=result.get("confidence_score", 0.8),
+            output="Answer synthesized from agentic retrieval results"
+        )
+        performance_tracker.complete_reasoning_step(question_id, step_num)
+    
+    return result

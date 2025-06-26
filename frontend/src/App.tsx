@@ -18,7 +18,7 @@ const AppContent = () => {
     selectedModel: 'gpt-4',
     embeddingModel: 'text-embedding-ada-002',
     searchType: 'hybrid',
-    temperature: 0.7,
+    temperature: 0.0,
     maxTokens: 2000,
   });
 

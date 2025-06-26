@@ -152,10 +152,12 @@ class QARequest(BaseModel):
     context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional context for the question")
     max_tokens: int = Field(default=4000, ge=1, le=8000)
     credibility_check_enabled: bool = Field(default=False, description="Whether to perform credibility checks on sources")
+    rag_method: str = Field(default="agent", description="RAG method to use: agent, traditional, llamaindex, agentic-vector")
 
 class QAResponse(BaseModel):
     answer: str = Field(..., description="The comprehensive answer to the question")
     session_id: str
+    question_id: str = Field(..., description="Unique identifier for this specific question")
     confidence_score: float = Field(ge=0.0, le=1.0, description="Overall confidence in the answer")
     citations: List[Citation] = Field(default_factory=list)
     sub_questions: List[str] = Field(default_factory=list, description="Sub-questions that were researched")

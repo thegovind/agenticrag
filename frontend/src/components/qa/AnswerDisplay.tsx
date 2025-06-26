@@ -13,6 +13,7 @@ interface AnswerDisplayProps {
   answer: QAAnswer;
   onVerifySources: () => void;
   onShowReasoningChain?: () => void;
+  onShowPerformance?: () => void;
   isVerifyingSources?: boolean;
   credibilityCheckEnabled?: boolean;
 }
@@ -21,6 +22,7 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
   answer, 
   onVerifySources, 
   onShowReasoningChain,
+  onShowPerformance,
   isVerifyingSources = false,
   credibilityCheckEnabled = false
 }) => {
@@ -77,6 +79,15 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
             <Badge variant="outline">
               {answer.metadata.verificationLevel || 'thorough'}
             </Badge>
+            {answer.metadata.rag_method && (
+              <Badge variant="secondary" className="text-xs">
+                {answer.metadata.rag_method === 'traditional' ? 'Traditional RAG' : 
+                 answer.metadata.rag_method === 'agent' ? 'Agent' :
+                 answer.metadata.rag_method === 'llamaindex' ? 'LlamaIndex' :
+                 answer.metadata.rag_method === 'agentic-vector' ? 'Agentic Vector' :
+                 answer.metadata.rag_method}
+              </Badge>
+            )}
           </div>
         </div>
         <div className="flex items-center space-x-4 text-sm text-muted-foreground">
@@ -177,6 +188,16 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
                   className="text-xs"
                 >
                   Show Reasoning
+                </Button>
+              )}
+              {onShowPerformance && answer.performanceBenchmark && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onShowPerformance}
+                  className="text-xs"
+                >
+                  Show Performance
                 </Button>
               )}
               {credibilityCheckEnabled && (
