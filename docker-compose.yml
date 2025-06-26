@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agenticrag-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Azure Configuration
+      - AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID}
+      - AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP}
+      - AZURE_SEARCH_SERVICE_NAME=${AZURE_SEARCH_SERVICE_NAME}
+      - AZURE_SEARCH_ADMIN_KEY=${AZURE_SEARCH_ADMIN_KEY}
+      - AZURE_SEARCH_ENDPOINT=${AZURE_SEARCH_ENDPOINT}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-02-01}
+      
+      # AI Foundry Configuration
+      - AZURE_AI_PROJECT_CONNECTION_STRING=${AZURE_AI_PROJECT_CONNECTION_STRING}
+      - AZURE_AI_PROJECT_NAME=${AZURE_AI_PROJECT_NAME}
+      - AZURE_AI_HUB_NAME=${AZURE_AI_HUB_NAME}
+      
+      # Storage Configuration
+      - AZURE_STORAGE_ACCOUNT_NAME=${AZURE_STORAGE_ACCOUNT_NAME}
+      - AZURE_STORAGE_ACCOUNT_KEY=${AZURE_STORAGE_ACCOUNT_KEY}
+      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
+      
+      # Application Configuration
+      - API_VERSION=v1
+      - LOG_LEVEL=INFO
+      - ENVIRONMENT=production
+      
+      # Model Configuration
+      - CHAT_MODEL_NAME=${CHAT_MODEL_NAME:-gpt-4o}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-text-embedding-3-small}
+      
+      # Security
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:80}
+    volumes:
+      - ./backend/.env:/app/.env:ro
+      - backend_logs:/app/logs
+    networks:
+      - agenticrag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: agenticrag-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - agenticrag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  backend_logs:
+    driver: local
+
+networks:
+  agenticrag-network:
+    driver: bridge

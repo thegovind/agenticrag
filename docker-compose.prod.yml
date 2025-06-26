@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agenticrag-backend-prod
+    environment:
+      - AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID}
+      - AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP}
+      - AZURE_SEARCH_SERVICE_NAME=${AZURE_SEARCH_SERVICE_NAME}
+      - AZURE_SEARCH_ADMIN_KEY=${AZURE_SEARCH_ADMIN_KEY}
+      - AZURE_SEARCH_ENDPOINT=${AZURE_SEARCH_ENDPOINT}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-02-01}
+      - AZURE_AI_PROJECT_CONNECTION_STRING=${AZURE_AI_PROJECT_CONNECTION_STRING}
+      - AZURE_AI_PROJECT_NAME=${AZURE_AI_PROJECT_NAME}
+      - AZURE_AI_HUB_NAME=${AZURE_AI_HUB_NAME}
+      - AZURE_STORAGE_ACCOUNT_NAME=${AZURE_STORAGE_ACCOUNT_NAME}
+      - AZURE_STORAGE_ACCOUNT_KEY=${AZURE_STORAGE_ACCOUNT_KEY}
+      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
+      - API_VERSION=v1
+      - LOG_LEVEL=INFO
+      - ENVIRONMENT=production
+      - CHAT_MODEL_NAME=${CHAT_MODEL_NAME:-gpt-4o}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-text-embedding-3-small}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+    volumes:
+      - backend_logs:/app/logs
+    networks:
+      - agenticrag-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: agenticrag-frontend-prod
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - agenticrag-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Optional: Reverse proxy with SSL termination
+  traefik:
+    image: traefik:v3.0
+    container_name: agenticrag-proxy
+    command:
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.myresolver.acme.httpchallenge=true
+      - --certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    networks:
+      - agenticrag-network
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.dashboard.rule=Host(`traefik.${DOMAIN_NAME}`)
+      - traefik.http.routers.dashboard.tls=true
+      - traefik.http.routers.dashboard.tls.certresolver=myresolver
+    profiles:
+      - proxy
+    restart: unless-stopped
+
+volumes:
+  backend_logs:
+    driver: local
+  traefik_letsencrypt:
+    driver: local
+
+networks:
+  agenticrag-network:
+    driver: bridge

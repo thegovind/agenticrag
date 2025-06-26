@@ -1,41 +1,47 @@
 # Azure Services
-azure-search-documents==11.4.0
+azure-search-documents==11.6.0b12
 azure-cosmos==4.5.1
 azure-ai-formrecognizer==3.3.2
-azure-identity==1.15.0
+azure-identity==1.16.0
 azure-keyvault-secrets==4.7.0
-azure-monitor-opentelemetry>=1.6.0
+azure-monitor-opentelemetry==1.6.7
 azure-ai-ml==1.12.0
 
-# Azure AI Services (evaluation will be done via OpenAI calls)
+# Azure AI Services (evaluation)
 azure-ai-generative==1.0.0b3
-azure-ai-projects>=1.0.0b2
-azure-ai-evaluation>=1.8.0
+azure-ai-projects==1.0.0b4
+azure-ai-evaluation==1.8.0
+azure-ai-inference==1.0.0b1
 
 # OpenAI and AI
-openai>=1.90.0
-semantic-kernel==0.9.6b1
+openai==1.90.0
+semantic-kernel==1.16.0
 
 # FastAPI and Web
-fastapi==0.109.2
-uvicorn[standard]==0.27.1
+fastapi[standard]==0.109.2
+uvicorn[standard]==0.29.0
 python-multipart==0.0.9
 httpx==0.26.0
 aiohttp==3.9.1
 
 # Data Processing
 pandas==2.2.0
-numpy<2.0,>=1.24
+numpy==1.26.4
 python-docx==1.1.0
 PyPDF2==3.0.1
 openpyxl==3.1.2
 tiktoken==0.5.2
 
-# Observability and Monitoring (let azure-monitor-opentelemetry manage these versions)
+# Observability and Monitoring
+opentelemetry-api==1.32.0
+opentelemetry-sdk==1.32.0
+opentelemetry-instrumentation-fastapi==0.53b0
+opentelemetry-instrumentation-httpx==0.53b0
+opentelemetry-instrumentation-openai-v2
 psutil==5.9.8
 
 # Additional dependencies
-pydantic>=2.0,<2.7
+pydantic==2.9.2
 pydantic-settings==2.1.0
 python-dotenv==1.0.1
 aiofiles==23.2.1
@@ -43,9 +49,6 @@ msal==1.25.0
 edgartools==2.27.0
 markdownify==0.12.1
 
-# Azure AI Foundry tracing and Application Insights
-azure-ai-projects
-azure-monitor-opentelemetry==1.6.7
-opentelemetry-instrumentation-openai-v2
-
-azure-search-documents==11.6.0b12
+# Development dependencies (optional, for debugging)
+pytest==7.4.3
+pytest-asyncio==0.21.0

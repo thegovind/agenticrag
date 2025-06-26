@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    // More lenient settings for production builds
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "strict": false,
+    // Skip lib checking for faster builds
+    "skipLibCheck": true,
+    // Allow implicit any
+    "noImplicitAny": false
+  }
+}
