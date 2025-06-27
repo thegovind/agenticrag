@@ -124,16 +124,44 @@ export const EvaluationAnalytics: React.FC = () => {
     }
   }, [selectedSession]);
 
-  const formatScore = (score: number | null | undefined): string => {
+  const formatScore = (score: number | null | undefined, isFoundry: boolean = false): string => {
     if (score === null || score === undefined || isNaN(score)) return 'N/A';
+    
+    // Foundry scores are on 1-5 scale, display as "X.X/5"
+    if (isFoundry || score > 1) {
+      return `${score.toFixed(1)}/5`;
+    }
+    
+    // Custom/legacy scores are on 0-1 scale, display as percentage
     return `${(score * 100).toFixed(1)}%`;
   };
 
-  const getScoreColor = (score: number | null | undefined): string => {
+  const getScoreColor = (score: number | null | undefined, isFoundry: boolean = false): string => {
     if (score === null || score === undefined || isNaN(score)) return 'text-gray-500';
+    
+    // Foundry scores are on 1-5 scale
+    if (isFoundry || score > 1) {
+      if (score >= 4) return 'text-green-600';   // 4-5: Good
+      if (score >= 3) return 'text-yellow-600';  // 3-4: Fair
+      return 'text-red-600';                     // 1-3: Poor
+    }
+    
+    // Custom/legacy scores are on 0-1 scale
     if (score >= 0.8) return 'text-green-600';
     if (score >= 0.6) return 'text-yellow-600';
     return 'text-red-600';
+  };
+
+  const getProgressValue = (score: number | null | undefined, isFoundry: boolean = false): number => {
+    if (score === null || score === undefined || isNaN(score)) return 0;
+    
+    // Foundry scores are on 1-5 scale, convert to 0-100 for progress bar
+    if (isFoundry || score > 1) {
+      return (score / 5) * 100;
+    }
+    
+    // Custom/legacy scores are on 0-1 scale
+    return score * 100;
   };
 
   const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff7c7c', '#8dd1e1'];
@@ -145,6 +173,39 @@ export const EvaluationAnalytics: React.FC = () => {
       </div>
     );
   }
+
+  // Show loading if analytics is null
+  if (!analytics) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <div className="text-muted-foreground">No analytics data available. Click refresh to load data.</div>
+      </div>
+    );
+  }
+
+  // Ensure analytics has the expected structure
+  const safeAnalytics = {
+    total_evaluations: analytics.total_evaluations || 0,
+    average_scores: analytics.average_scores || {
+      overall: 0,
+      groundedness: 0,
+      relevance: 0,
+      coherence: 0,
+      fluency: 0
+    },
+    evaluator_distribution: analytics.evaluator_distribution || {
+      foundry: 0,
+      custom: 0
+    },
+    rag_method_performance: analytics.rag_method_performance || [],
+    daily_trends: analytics.daily_trends || [],
+    score_distribution: analytics.score_distribution || [],
+    top_performing_sessions: analytics.top_performing_sessions || []
+  };
+
+  // Determine if scores are primarily from Foundry evaluators (1-5 scale) vs Custom (0-1 scale)
+  const isFoundryPrimary = safeAnalytics.evaluator_distribution.foundry > safeAnalytics.evaluator_distribution.custom;
+  const hasFoundryData = safeAnalytics.evaluator_distribution.foundry > 0;
 
   return (
     <div className="space-y-6">
@@ -250,7 +311,7 @@ export const EvaluationAnalytics: React.FC = () => {
                     <FileText className="h-8 w-8 text-blue-600" />
                     <div className="ml-4">
                       <p className="text-sm font-medium text-muted-foreground">Total Evaluations</p>
-                      <p className="text-2xl font-bold">{analytics.total_evaluations}</p>
+                      <p className="text-2xl font-bold">{safeAnalytics.total_evaluations}</p>
                     </div>
                   </div>
                 </CardContent>
@@ -262,8 +323,8 @@ export const EvaluationAnalytics: React.FC = () => {
                     <Target className="h-8 w-8 text-green-600" />
                     <div className="ml-4">
                       <p className="text-sm font-medium text-muted-foreground">Avg Overall Score</p>
-                      <p className={`text-2xl font-bold ${getScoreColor(analytics.average_scores.overall)}`}>
-                        {formatScore(analytics.average_scores.overall)}
+                      <p className={`text-2xl font-bold ${getScoreColor(safeAnalytics.average_scores.overall, hasFoundryData)}`}>
+                        {formatScore(safeAnalytics.average_scores.overall, hasFoundryData)}
                       </p>
                     </div>
                   </div>
@@ -277,7 +338,7 @@ export const EvaluationAnalytics: React.FC = () => {
                     <div className="ml-4">
                       <p className="text-sm font-medium text-muted-foreground">Foundry vs Custom</p>
                       <p className="text-2xl font-bold">
-                        {analytics.evaluator_distribution.foundry}:{analytics.evaluator_distribution.custom}
+                        {safeAnalytics.evaluator_distribution.foundry}:{safeAnalytics.evaluator_distribution.custom}
                       </p>
                     </div>
                   </div>
@@ -290,7 +351,7 @@ export const EvaluationAnalytics: React.FC = () => {
                     <Users className="h-8 w-8 text-orange-600" />
                     <div className="ml-4">
                       <p className="text-sm font-medium text-muted-foreground">Top Sessions</p>
-                      <p className="text-2xl font-bold">{analytics.top_performing_sessions.length}</p>
+                      <p className="text-2xl font-bold">{safeAnalytics.top_performing_sessions.length}</p>
                     </div>
                   </div>
                 </CardContent>
@@ -308,41 +369,41 @@ export const EvaluationAnalytics: React.FC = () => {
                     <div>
                       <div className="flex justify-between text-sm">
                         <span>Groundedness</span>
-                        <span className={getScoreColor(analytics.average_scores.groundedness)}>
-                          {formatScore(analytics.average_scores.groundedness)}
+                        <span className={getScoreColor(safeAnalytics.average_scores.groundedness, hasFoundryData)}>
+                          {formatScore(safeAnalytics.average_scores.groundedness, hasFoundryData)}
                         </span>
                       </div>
-                      <Progress value={(analytics.average_scores.groundedness || 0) * 100} className="h-2" />
+                      <Progress value={getProgressValue(safeAnalytics.average_scores.groundedness, hasFoundryData)} className="h-2" />
                     </div>
                     
                     <div>
                       <div className="flex justify-between text-sm">
                         <span>Relevance</span>
-                        <span className={getScoreColor(analytics.average_scores.relevance)}>
-                          {formatScore(analytics.average_scores.relevance)}
+                        <span className={getScoreColor(safeAnalytics.average_scores.relevance, hasFoundryData)}>
+                          {formatScore(safeAnalytics.average_scores.relevance, hasFoundryData)}
                         </span>
                       </div>
-                      <Progress value={(analytics.average_scores.relevance || 0) * 100} className="h-2" />
+                      <Progress value={getProgressValue(safeAnalytics.average_scores.relevance, hasFoundryData)} className="h-2" />
                     </div>
                     
                     <div>
                       <div className="flex justify-between text-sm">
                         <span>Coherence</span>
-                        <span className={getScoreColor(analytics.average_scores.coherence)}>
-                          {formatScore(analytics.average_scores.coherence)}
+                        <span className={getScoreColor(safeAnalytics.average_scores.coherence, hasFoundryData)}>
+                          {formatScore(safeAnalytics.average_scores.coherence, hasFoundryData)}
                         </span>
                       </div>
-                      <Progress value={(analytics.average_scores.coherence || 0) * 100} className="h-2" />
+                      <Progress value={getProgressValue(safeAnalytics.average_scores.coherence, hasFoundryData)} className="h-2" />
                     </div>
                     
                     <div>
                       <div className="flex justify-between text-sm">
                         <span>Fluency</span>
-                        <span className={getScoreColor(analytics.average_scores.fluency)}>
-                          {formatScore(analytics.average_scores.fluency)}
+                        <span className={getScoreColor(safeAnalytics.average_scores.fluency, hasFoundryData)}>
+                          {formatScore(safeAnalytics.average_scores.fluency, hasFoundryData)}
                         </span>
                       </div>
-                      <Progress value={(analytics.average_scores.fluency || 0) * 100} className="h-2" />
+                      <Progress value={getProgressValue(safeAnalytics.average_scores.fluency, hasFoundryData)} className="h-2" />
                     </div>
                   </div>
                 </CardContent>
@@ -356,7 +417,7 @@ export const EvaluationAnalytics: React.FC = () => {
                   <ResponsiveContainer width="100%" height={200}>
                     <PieChart>
                       <Pie
-                        data={analytics.score_distribution}
+                        data={safeAnalytics.score_distribution}
                         dataKey="count"
                         nameKey="range"
                         cx="50%"
@@ -364,7 +425,7 @@ export const EvaluationAnalytics: React.FC = () => {
                         outerRadius={80}
                         fill="#8884d8"
                       >
-                        {analytics.score_distribution.map((_, index) => (
+                        {safeAnalytics.score_distribution.map((_, index) => (
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </Pie>
@@ -385,7 +446,7 @@ export const EvaluationAnalytics: React.FC = () => {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={analytics.rag_method_performance}>
+                  <BarChart data={safeAnalytics.rag_method_performance}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="method" />
                     <YAxis />

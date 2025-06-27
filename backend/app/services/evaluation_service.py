@@ -282,39 +282,275 @@ class EvaluationService:
         Get evaluation analytics across multiple sessions
         """
         try:
-            logger.info(f"Getting evaluation analytics for {days} days")
+            logger.info(f"Getting evaluation analytics for {days} days, evaluator_type={evaluator_type}, rag_method={rag_method}")
             
-            # TODO: Implement date range query and analytics calculation
-            return {
-                "total_evaluations": 0,
-                "date_range": {
-                    "start": (datetime.utcnow() - timedelta(days=days)).isoformat(),
-                    "end": datetime.utcnow().isoformat()
-                },
-                "by_evaluator_type": {},
-                "by_rag_method": {},
-                "overall_metrics": {
-                    "avg_groundedness": None,
-                    "avg_relevance": None,
-                    "avg_coherence": None,
-                    "avg_fluency": None,
-                    "avg_overall": None
-                },
-                "trends": {
-                    "daily_averages": {},
-                    "trend_direction": "stable"
-                },
-                "performance_distribution": {
-                    "excellent": 0,
-                    "good": 0,
-                    "fair": 0,
-                    "poor": 0
+            # Calculate date range
+            end_date = datetime.utcnow()
+            start_date = end_date - timedelta(days=days)
+            
+            # Build query conditions - note: evaluation results don't have a 'type' field
+            # Instead, we'll filter by the presence of evaluation-specific fields
+            conditions = ['c.evaluator_type != null']  # This identifies evaluation results
+            # Use evaluation_timestamp as it's the main timestamp field in evaluation results
+            conditions.append(f'c.evaluation_timestamp >= "{start_date.isoformat()}"')
+            conditions.append(f'c.evaluation_timestamp <= "{end_date.isoformat()}"')
+            
+            if evaluator_type:
+                conditions.append(f'c.evaluator_type = "{evaluator_type.value}"')
+            if rag_method:
+                conditions.append(f'c.rag_method = "{rag_method}"')
+            
+            query = f"SELECT * FROM c WHERE {' AND '.join(conditions)}"
+            logger.info(f"Analytics query: {query}")
+            
+            # Initialize azure manager if needed
+            if not hasattr(self, 'azure_manager') or not self.azure_manager:
+                from app.services.azure_services import AzureServiceManager
+                self.azure_manager = AzureServiceManager()
+                await self.azure_manager.initialize()
+            
+            # Query Cosmos DB directly
+            if not self.azure_manager.cosmos_client:
+                logger.warning("CosmosDB client not available")
+                return self._get_empty_analytics()
+            
+            database = self.azure_manager.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
+            container = database.get_container_client(settings.AZURE_COSMOS_EVALUATION_CONTAINER_NAME)
+            
+            # Execute query
+            results = list(container.query_items(
+                query=query,
+                enable_cross_partition_query=True
+            ))
+            
+            logger.info(f"Found {len(results)} evaluation results for analytics")
+            
+            if not results:
+                # Return empty structure if no data
+                return {
+                    "total_evaluations": 0,
+                    "average_scores": {
+                        "overall": 0.0,
+                        "groundedness": 0.0,
+                        "relevance": 0.0,
+                        "coherence": 0.0,
+                        "fluency": 0.0
+                    },
+                    "evaluator_distribution": {
+                        "foundry": 0,
+                        "custom": 0
+                    },
+                    "rag_method_performance": [],
+                    "daily_trends": [],
+                    "score_distribution": [],
+                    "top_performing_sessions": []
                 }
+            
+            # Calculate analytics
+            total_evaluations = len(results)
+            
+            # Calculate average scores
+            all_scores = {
+                "overall": [],
+                "groundedness": [],
+                "relevance": [],
+                "coherence": [],
+                "fluency": []
             }
+            
+            evaluator_counts = {"foundry": 0, "custom": 0}
+            rag_method_data = {}
+            session_scores = {}
+            daily_data = {}
+            
+            for result in results:
+                evaluator_type_str = result.get("evaluator_type", "custom")
+                if evaluator_type_str == "foundry":
+                    evaluator_counts["foundry"] += 1
+                else:
+                    evaluator_counts["custom"] += 1
+                
+                # RAG method tracking
+                rag_method_name = result.get("rag_method", "unknown")
+                if rag_method_name not in rag_method_data:
+                    rag_method_data[rag_method_name] = {"count": 0, "scores": []}
+                rag_method_data[rag_method_name]["count"] += 1
+                
+                # Session tracking
+                session_id = result.get("session_id")
+                if session_id not in session_scores:
+                    session_scores[session_id] = []
+                
+                # Daily tracking - use evaluation_timestamp instead of created_at
+                evaluation_timestamp = result.get("evaluation_timestamp", "")
+                if evaluation_timestamp:
+                    try:
+                        date_obj = datetime.fromisoformat(evaluation_timestamp.replace("Z", "+00:00"))
+                        date_str = date_obj.strftime("%Y-%m-%d")
+                        if date_str not in daily_data:
+                            daily_data[date_str] = {"count": 0, "scores": []}
+                        daily_data[date_str]["count"] += 1
+                    except Exception as e:
+                        logger.warning(f"Error parsing date {evaluation_timestamp}: {e}")
+                
+                # Extract scores directly from document (not from metrics field)
+                result_scores = {}
+                
+                # Extract individual metric scores
+                if result.get("groundedness_score") is not None:
+                    score = float(result["groundedness_score"])
+                    result_scores["groundedness"] = score
+                    all_scores["groundedness"].append(score)
+                
+                if result.get("relevance_score") is not None:
+                    score = float(result["relevance_score"])
+                    result_scores["relevance"] = score
+                    all_scores["relevance"].append(score)
+                
+                if result.get("coherence_score") is not None:
+                    score = float(result["coherence_score"])
+                    result_scores["coherence"] = score
+                    all_scores["coherence"].append(score)
+                
+                if result.get("fluency_score") is not None:
+                    score = float(result["fluency_score"])
+                    result_scores["fluency"] = score
+                    all_scores["fluency"].append(score)
+                
+                # Use overall_score if available, otherwise calculate it
+                overall_score = result.get("overall_score")
+                if overall_score is not None:
+                    overall_score = float(overall_score)
+                elif result_scores:
+                    # Calculate overall score as average of available metrics
+                    overall_score = sum(result_scores.values()) / len(result_scores)
+                else:
+                    overall_score = 0.0
+                
+                if overall_score > 0:
+                    all_scores["overall"].append(overall_score)
+                    session_scores[session_id].append(overall_score)
+                    rag_method_data[rag_method_name]["scores"].append(overall_score)
+                    
+                    if evaluation_timestamp and date_str in daily_data:
+                        daily_data[date_str]["scores"].append(overall_score)
+            
+            # Calculate averages
+            average_scores = {}
+            for metric, scores in all_scores.items():
+                if scores:
+                    average_scores[metric] = sum(scores) / len(scores)
+                else:
+                    average_scores[metric] = 0.0
+            
+            # Calculate RAG method performance
+            rag_method_performance = []
+            for method, data in rag_method_data.items():
+                avg_score = sum(data["scores"]) / len(data["scores"]) if data["scores"] else 0.0
+                rag_method_performance.append({
+                    "method": method,
+                    "count": data["count"],
+                    "avg_score": avg_score
+                })
+            
+            # Calculate daily trends
+            daily_trends = []
+            for date_str in sorted(daily_data.keys()):
+                data = daily_data[date_str]
+                avg_score = sum(data["scores"]) / len(data["scores"]) if data["scores"] else 0.0
+                daily_trends.append({
+                    "date": date_str,
+                    "evaluations": data["count"],
+                    "avg_score": avg_score
+                })
+            
+            # Calculate top performing sessions
+            top_performing_sessions = []
+            for session_id, scores in session_scores.items():
+                if scores:
+                    avg_score = sum(scores) / len(scores)
+                    top_performing_sessions.append({
+                        "session_id": session_id,
+                        "avg_score": avg_score,
+                        "evaluation_count": len(scores)
+                    })
+            
+            # Sort by score and take top 10
+            top_performing_sessions.sort(key=lambda x: x["avg_score"], reverse=True)
+            top_performing_sessions = top_performing_sessions[:10]
+            
+            # Calculate score distribution - adapt to score scale
+            overall_scores = all_scores["overall"]
+            score_distribution = []
+            if overall_scores:
+                # Determine if we're dealing with 1-5 scale (Foundry) or 0-1 scale (Custom)
+                max_score = max(overall_scores) if overall_scores else 0
+                is_foundry_scale = max_score > 1.5  # If max score > 1.5, assume 1-5 scale
+                
+                if is_foundry_scale:
+                    # 1-5 scale distribution
+                    ranges = [
+                        ("1.0-2.0", 1.0, 2.0),
+                        ("2.0-3.0", 2.0, 3.0),
+                        ("3.0-4.0", 3.0, 4.0),
+                        ("4.0-5.0", 4.0, 5.0)
+                    ]
+                else:
+                    # 0-1 scale distribution  
+                    ranges = [
+                        ("0.0-0.2", 0.0, 0.2),
+                        ("0.2-0.4", 0.2, 0.4),
+                        ("0.4-0.6", 0.4, 0.6),
+                        ("0.6-0.8", 0.6, 0.8),
+                        ("0.8-1.0", 0.8, 1.0)
+                    ]
+                
+                for range_name, min_val, max_val in ranges:
+                    if range_name == ranges[-1][0]:  # Include max value in the last bucket
+                        count = sum(1 for score in overall_scores if min_val <= score <= max_val)
+                    else:
+                        count = sum(1 for score in overall_scores if min_val <= score < max_val)
+                    score_distribution.append({
+                        "range": range_name,
+                        "count": count
+                    })
+            
+            analytics_result = {
+                "total_evaluations": total_evaluations,
+                "average_scores": average_scores,
+                "evaluator_distribution": evaluator_counts,
+                "rag_method_performance": rag_method_performance,
+                "daily_trends": daily_trends,
+                "score_distribution": score_distribution,
+                "top_performing_sessions": top_performing_sessions
+            }
+            
+            logger.info(f"Analytics calculated: {total_evaluations} evaluations, avg overall: {average_scores.get('overall', 0):.3f}")
+            return analytics_result
             
         except Exception as e:
             logger.error(f"Error getting analytics: {e}")
-            return {"error": str(e)}
+            import traceback
+            traceback.print_exc()
+            # Return empty structure on error
+            return {
+                "total_evaluations": 0,
+                "average_scores": {
+                    "overall": 0.0,
+                    "groundedness": 0.0,
+                    "relevance": 0.0,
+                    "coherence": 0.0,
+                    "fluency": 0.0
+                },
+                "evaluator_distribution": {
+                    "foundry": 0,
+                    "custom": 0
+                },
+                "rag_method_performance": [],
+                "daily_trends": [],
+                "score_distribution": [],
+                "top_performing_sessions": []
+            }
     
     async def delete_session_results(self, session_id: str) -> int:
         """
