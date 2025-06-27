@@ -2,17 +2,20 @@
 Subprocess-based Azure AI Foundry Evaluator to avoid HTTP client conflicts
 """
 
-import subprocess
+import asyncio
 import json
 import tempfile
 import os
 import sys
+import platform
+import subprocess
+import concurrent.futures
 from typing import Dict, Any, List
 import logging
 
 logger = logging.getLogger(__name__)
 
-def run_foundry_evaluation(
+async def run_foundry_evaluation_async(
     evaluator_name: str,
     query: str,
     response: str,
@@ -23,8 +26,11 @@ def run_foundry_evaluation(
     api_version: str = ""
 ) -> Dict[str, Any]:
     """
-    Run Azure AI Foundry evaluation in a separate subprocess to avoid HTTP client conflicts
+    Run Azure AI Foundry evaluation in a separate subprocess asynchronously to avoid HTTP client conflicts
     """
+    import time
+    eval_start_time = time.time()
+    logger.info(f"🔄 Starting async evaluation for {evaluator_name}")
     
     # Properly escape strings for Python script
     def escape_string(s: str) -> str:
@@ -143,52 +149,125 @@ if __name__ == "__main__":
             temp_script_path = temp_file.name
         
         # Debug: Print the generated script for troubleshooting
-        logger.debug(f"Generated script saved to: {temp_script_path}")
+        logger.info(f"📝 Generated script saved to: {temp_script_path}")
+        logger.info(f"🐍 Python executable: {sys.executable}")
         logger.debug(f"Script content:\n{eval_script}")
         
         # Run the script in a subprocess with UTF-8 encoding
-        result = subprocess.run(
-            [sys.executable, temp_script_path],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            timeout=60  # 60 second timeout
-        )
-        
-        # Debug: Log subprocess output
-        logger.debug(f"Subprocess return code: {result.returncode}")
-        logger.debug(f"Subprocess stdout: {result.stdout}")
-        logger.debug(f"Subprocess stderr: {result.stderr}")
-        
-        # Clean up temporary file
-        os.unlink(temp_script_path)
-        
-        if result.returncode == 0:
-            # Parse JSON output
-            try:
-                return json.loads(result.stdout.strip())
-            except json.JSONDecodeError:
+        # Use async subprocess for true parallel execution
+        logger.info(f"🔧 Starting async subprocess for {evaluator_name} with script: {temp_script_path}")
+        try:
+            # On Windows, we need to use ProactorEventLoop for subprocess support
+            import platform
+            if platform.system() == "Windows":
+                # For Windows, use run_in_executor with a thread pool for subprocess
+                import subprocess
+                import concurrent.futures
+                
+                def run_subprocess():
+                    return subprocess.run(
+                        [sys.executable, temp_script_path],
+                        capture_output=True,
+                        text=True,
+                        timeout=60
+                    )
+                
+                logger.info(f"⏳ Running {evaluator_name} subprocess on Windows using thread executor...")
+                loop = asyncio.get_event_loop()
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    completed_process = await loop.run_in_executor(executor, run_subprocess)
+                
+                # Convert subprocess.CompletedProcess to match our expected interface
+                class MockProcess:
+                    def __init__(self, completed_process):
+                        self.returncode = completed_process.returncode
+                        self.stdout = completed_process.stdout.encode('utf-8')
+                        self.stderr = completed_process.stderr.encode('utf-8')
+                
+                process = MockProcess(completed_process)
+                stdout, stderr = process.stdout, process.stderr
+                
+            else:
+                # For Unix-like systems, use the standard async subprocess
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable, temp_script_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                logger.info(f"⏳ Waiting for {evaluator_name} subprocess to complete...")
+                # Wait for process to complete with timeout
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), 
+                    timeout=60.0  # 60 second timeout
+                )
+            
+            # Debug: Log subprocess output
+            stdout_text = stdout.decode('utf-8')
+            stderr_text = stderr.decode('utf-8')
+            
+            logger.debug(f"Async subprocess return code: {process.returncode}")
+            logger.debug(f"Async subprocess stdout: {stdout_text}")
+            logger.debug(f"Async subprocess stderr: {stderr_text}")
+            
+            # Clean up temporary file
+            os.unlink(temp_script_path)
+            
+            if process.returncode == 0:
+                # Parse JSON output
+                try:
+                    eval_duration = (time.time() - eval_start_time) * 1000
+                    result = json.loads(stdout_text.strip())
+                    logger.info(f"✅ {evaluator_name} completed in {eval_duration:.1f}ms with score: {result.get('score', 'N/A')}")
+                    return result
+                except json.JSONDecodeError:
+                    logger.error(f"❌ {evaluator_name} failed - JSON parse error")
+                    return {
+                        "score": 0.0,
+                        "error": "Failed to parse evaluation result",
+                        "reasoning": f"Subprocess output: {stdout_text}"
+                    }
+            else:
+                eval_duration = (time.time() - eval_start_time) * 1000
+                logger.error(f"❌ {evaluator_name} failed in {eval_duration:.1f}ms - return code {process.returncode}")
                 return {
                     "score": 0.0,
-                    "error": "Failed to parse evaluation result",
-                    "reasoning": f"Subprocess output: {result.stdout}"
+                    "error": f"Subprocess failed with return code {process.returncode}",
+                    "reasoning": f"Error: {stderr_text}"
                 }
-        else:
+                
+        except (asyncio.TimeoutError, subprocess.TimeoutExpired):
+            logger.error(f"❌ {evaluator_name} subprocess timed out after 60 seconds")
             return {
                 "score": 0.0,
-                "error": f"Subprocess failed with return code {result.returncode}",
-                "reasoning": f"Error: {result.stderr}"
+                "error": "Evaluation timeout",
+                "reasoning": "Evaluation process timed out after 60 seconds"
             }
-            
-    except subprocess.TimeoutExpired:
-        return {
-            "score": 0.0,
-            "error": "Evaluation timeout",
-            "reasoning": "Evaluation process timed out after 60 seconds"
-        }
     except Exception as e:
+        eval_duration = (time.time() - eval_start_time) * 1000
+        logger.error(f"❌ {evaluator_name} async subprocess failed in {eval_duration:.1f}ms: {str(e)}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         return {
             "score": 0.0,
             "error": str(e),
             "reasoning": f"Failed to run subprocess evaluation: {str(e)}"
         }
+
+def run_foundry_evaluation(
+    evaluator_name: str,
+    query: str,
+    response: str,
+    context: str = "",
+    azure_endpoint: str = "",
+    api_key: str = "",
+    deployment: str = "",
+    api_version: str = ""
+) -> Dict[str, Any]:
+    """
+    Synchronous wrapper for run_foundry_evaluation_async for backward compatibility
+    """
+    return asyncio.run(run_foundry_evaluation_async(
+        evaluator_name, query, response, context,
+        azure_endpoint, api_key, deployment, api_version
+    ))

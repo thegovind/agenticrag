@@ -23,24 +23,59 @@ logger = logging.getLogger(__name__)
 async def evaluate_answer(
     request: EvaluationRequest,
     background_tasks: BackgroundTasks,
-    app_request: Request
+    app_request: Request,
+    background: bool = Query(False, description="Run evaluation in background")
 ):
     """
-    Evaluate a QA answer using the specified evaluator type
+    Evaluate a QA answer using the specified evaluator type.
+    
+    If background=True, returns immediately with a pending result and runs evaluation in background.
+    If background=False (default), waits for evaluation to complete and returns the result.
     """
     try:
-        logger.info(f"Received evaluation request for question_id: {request.question_id}")
+        logger.info(f"Received evaluation request for question_id: {request.question_id}, background: {background}")
         
         # Get azure_manager from app state
         azure_manager = getattr(app_request.app.state, 'azure_manager', None)
         
-        # Perform evaluation
-        result = await evaluation_service.evaluate_answer(request, azure_manager)
-        
-        # Note: Result is already stored in Cosmos DB by evaluation_service
-        logger.info(f"Evaluation completed for question_id: {request.question_id}")
-        
-        return result
+        if background:
+            # Return immediately with pending status and run evaluation in background
+            pending_result = EvaluationResult(
+                question_id=request.question_id,
+                session_id=request.session_id,
+                evaluator_type=request.evaluator_type,
+                rag_method=request.rag_method,
+                question=request.question,
+                answer=request.answer,
+                context=request.context,
+                ground_truth=request.ground_truth,
+                evaluation_model=request.evaluation_model or "o3-mini",
+                reasoning="Evaluation is running in background",
+                metadata={"status": "pending", "background": True},
+                evaluation_timestamp=datetime.utcnow()
+            )
+            
+            # Store pending result first
+            await evaluation_service._store_result(pending_result)
+            
+            # Add background task for actual evaluation
+            background_tasks.add_task(
+                evaluation_service._background_evaluate_and_store,
+                request,
+                azure_manager,
+                pending_result.id
+            )
+            
+            logger.info(f"Started background evaluation for question_id: {request.question_id}")
+            return pending_result
+        else:
+            # Perform evaluation synchronously and return result
+            result = await evaluation_service.evaluate_answer(request, azure_manager)
+            
+            # Note: Result is already stored in Cosmos DB by evaluation_service
+            logger.info(f"Evaluation completed for question_id: {request.question_id}")
+            
+            return result
         
     except Exception as e:
         logger.error(f"Error in evaluate_answer endpoint: {e}")

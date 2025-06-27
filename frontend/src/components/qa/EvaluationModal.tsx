@@ -50,6 +50,15 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
 
   const getScoreColor = (score: number | undefined) => {
     if (!score) return 'text-muted-foreground';
+    
+    // For Foundry evaluators (1-5 scale)
+    if (evaluationResult.evaluator_type === 'foundry') {
+      if (score >= 4) return 'text-green-600';
+      if (score >= 3) return 'text-yellow-600';
+      return 'text-red-600';
+    }
+    
+    // For custom evaluators (0-1 scale)
     if (score >= 0.8) return 'text-green-600';
     if (score >= 0.6) return 'text-yellow-600';
     return 'text-red-600';
@@ -57,6 +66,16 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
 
   const getScoreLabel = (score: number | undefined) => {
     if (!score) return 'N/A';
+    
+    // For Foundry evaluators (1-5 scale)
+    if (evaluationResult.evaluator_type === 'foundry') {
+      if (score >= 4) return 'Excellent';
+      if (score >= 3) return 'Good';
+      if (score >= 2) return 'Fair';
+      return 'Poor';
+    }
+    
+    // For custom evaluators (0-1 scale)
     if (score >= 0.8) return 'Excellent';
     if (score >= 0.6) return 'Good';
     if (score >= 0.4) return 'Fair';
@@ -64,7 +83,27 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
   };
 
   const formatScore = (score: number | undefined) => {
-    return score ? (score * 100).toFixed(1) + '%' : 'N/A';
+    if (!score) return 'N/A';
+    
+    // For Foundry evaluators (1-5 scale), show as "4.0/5"
+    if (evaluationResult.evaluator_type === 'foundry') {
+      return `${score.toFixed(1)}/5`;
+    }
+    
+    // For custom evaluators (0-1 scale), show as percentage
+    return (score * 100).toFixed(1) + '%';
+  };
+
+  const getProgressValue = (score: number | undefined) => {
+    if (!score) return 0;
+    
+    // For Foundry evaluators (1-5 scale), convert to 0-100 for progress bar
+    if (evaluationResult.evaluator_type === 'foundry') {
+      return (score / 5) * 100;
+    }
+    
+    // For custom evaluators (0-1 scale), convert to percentage
+    return score * 100;
   };
 
   const scores = [
@@ -125,7 +164,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
                     </div>
                     <div className="flex-1">
                       <Progress 
-                        value={(evaluationResult.overall_score || 0) * 100} 
+                        value={getProgressValue(evaluationResult.overall_score)} 
                         className="h-3"
                       />
                       <p className="text-sm text-muted-foreground mt-1">
@@ -152,7 +191,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
                           {formatScore(score.value)}
                         </span>
                       </div>
-                      <Progress value={(score.value || 0) * 100} className="h-2" />
+                      <Progress value={getProgressValue(score.value)} className="h-2" />
                       <p className="text-xs text-muted-foreground">
                         {score.description}
                       </p>

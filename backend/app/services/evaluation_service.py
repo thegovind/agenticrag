@@ -441,6 +441,78 @@ class EvaluationService:
             logger.error(f"Error listing evaluation results: {e}")
             return []
 
+    async def _background_evaluate_and_store(self, request: EvaluationRequest, azure_manager, pending_result_id: str):
+        """
+        Background method to perform evaluation and update the stored result
+        """
+        try:
+            logger.info(f"Starting background evaluation for question_id: {request.question_id}")
+            
+            # Store original azure_manager and set the provided one
+            original_azure_manager = self.azure_manager
+            self.azure_manager = azure_manager
+            
+            try:
+                # Perform the actual evaluation (but prevent infinite recursion by calling the underlying evaluator directly)
+                start_time = time.time()
+                
+                # Route to the appropriate evaluator based on request type
+                if request.evaluator_type == EvaluatorType.FOUNDRY:
+                    self._ensure_foundry_evaluator()
+                    if self.foundry_evaluator and getattr(self.foundry_evaluator, 'available_evaluators', {}):
+                        logger.info("Using Azure AI Foundry evaluator for background task")
+                        result = await self.foundry_evaluator.evaluate(request)
+                    else:
+                        raise ValueError("Azure AI Foundry evaluator is not available or not properly initialized")
+                else:  # Custom evaluator requested
+                    self._ensure_custom_evaluator()
+                    if self.custom_evaluator and getattr(self.custom_evaluator, 'client', None):
+                        logger.info("Using Custom evaluator for background task")
+                        result = await self.custom_evaluator.evaluate(request)
+                    else:
+                        raise ValueError("Custom evaluator is not available or not properly initialized")
+                
+                # Set timing information
+                result.evaluation_duration_ms = int((time.time() - start_time) * 1000)
+                result.evaluation_timestamp = datetime.utcnow()
+                
+                # Update the result ID to match the pending result
+                result.id = pending_result_id
+                result.metadata = {"status": "completed", "background": True}
+                
+                # Store the completed result (this will overwrite the pending result)
+                await self._store_result(result)
+                
+                logger.info(f"Background evaluation completed for question_id: {request.question_id} in {result.evaluation_duration_ms}ms")
+                
+            finally:
+                # Restore original azure_manager
+                self.azure_manager = original_azure_manager
+                
+        except Exception as e:
+            logger.error(f"Background evaluation failed for question_id: {request.question_id}: {e}")
+            
+            # Store error result
+            try:
+                error_result = EvaluationResult(
+                    id=pending_result_id,
+                    question_id=request.question_id,
+                    session_id=request.session_id,
+                    evaluator_type=request.evaluator_type,
+                    rag_method=request.rag_method,
+                    question=request.question,
+                    answer=request.answer,
+                    context=request.context,
+                    ground_truth=request.ground_truth,
+                    evaluation_model=request.evaluation_model or "o3-mini",
+                    error_message=str(e),
+                    metadata={"status": "error", "background": True},
+                    evaluation_timestamp=datetime.utcnow()
+                )
+                await self._store_result(error_result)
+            except Exception as store_error:
+                logger.error(f"Failed to store error result: {store_error}")
+
 class FoundryEvaluator:
     """
     Azure AI Foundry evaluator that uses subprocess isolation to avoid HTTP client conflicts.
@@ -498,6 +570,9 @@ class FoundryEvaluator:
         return self.available_evaluators
 
     async def evaluate(self, request: EvaluationRequest) -> EvaluationResult:
+        """
+        Asynchronous evaluation with parallel metric execution for improved performance
+        """
         if not self.evaluators:
             raise ValueError("Azure AI Foundry evaluators not available")
             
@@ -519,33 +594,62 @@ class FoundryEvaluator:
             "context": "\n".join(request.context) if request.context else ""
         }
 
-        detailed_scores = {}
-        scores = []
-
-        # Run evaluations for requested metrics
+        # Create evaluation tasks for parallel execution
+        evaluation_tasks = []
+        metric_names = []
+        
+        # Run evaluations for requested metrics in parallel
         for metric in request.metrics:
             metric_key = metric.value.lower()
             if metric_key in self.evaluators:
-                try:
-                    score_result = await self._run_evaluator(metric_key, eval_data)
-                    detailed_scores[metric_key] = score_result
-                    
-                    # Set specific metric scores
-                    if metric_key == "groundedness":
-                        result.groundedness_score = score_result.get("score", 0.0)
-                        scores.append(result.groundedness_score)
-                    elif metric_key == "relevance":
-                        result.relevance_score = score_result.get("score", 0.0)
-                        scores.append(result.relevance_score)
-                    elif metric_key == "coherence":
-                        result.coherence_score = score_result.get("score", 0.0)
-                        scores.append(result.coherence_score)
-                    elif metric_key == "fluency":
-                        result.fluency_score = score_result.get("score", 0.0)
-                        scores.append(result.fluency_score)
+                task = self._run_evaluator(metric_key, eval_data)
+                evaluation_tasks.append(task)
+                metric_names.append(metric_key)
+                logger.info(f"Added {metric_key} evaluation task to parallel execution")
+
+        # Execute all evaluations in parallel
+        parallel_start_time = time.time()
+        logger.info(f"🚀 Starting PARALLEL execution of {len(evaluation_tasks)} metrics: {metric_names}")
+        detailed_scores = {}
+        scores = []
+        
+        if evaluation_tasks:
+            try:
+                # Run all evaluation tasks concurrently with timing
+                logger.info(f"⚡ Executing {len(evaluation_tasks)} evaluations concurrently...")
+                results = await asyncio.gather(*evaluation_tasks, return_exceptions=True)
+                parallel_duration = (time.time() - parallel_start_time) * 1000
+                logger.info(f"✅ Parallel execution completed in {parallel_duration:.1f}ms")
+                
+                # Process results and assign to appropriate fields
+                for i, (metric_key, score_result) in enumerate(zip(metric_names, results)):
+                    if isinstance(score_result, Exception):
+                        logger.error(f"❌ Error evaluating {metric_key}: {score_result}")
+                        detailed_scores[metric_key] = {"score": 0.0, "error": str(score_result)}
+                    else:
+                        detailed_scores[metric_key] = score_result
                         
-                except Exception as e:
-                    logger.error(f"Error evaluating {metric_key}: {e}")
+                        # Set specific metric scores
+                        score_value = score_result.get("score", 0.0)
+                        if metric_key == "groundedness":
+                            result.groundedness_score = score_value
+                            scores.append(score_value)
+                        elif metric_key == "relevance":
+                            result.relevance_score = score_value
+                            scores.append(score_value)
+                        elif metric_key == "coherence":
+                            result.coherence_score = score_value
+                            scores.append(score_value)
+                        elif metric_key == "fluency":
+                            result.fluency_score = score_value
+                            scores.append(score_value)
+                        
+                        logger.info(f"✅ {metric_key}: {score_value}")
+                        
+            except Exception as e:
+                logger.error(f"❌ Error in parallel evaluation execution: {e}")
+                # Set default scores for error case
+                for metric_key in metric_names:
                     detailed_scores[metric_key] = {"score": 0.0, "error": str(e)}
 
         # Calculate overall score
@@ -553,18 +657,18 @@ class FoundryEvaluator:
         result.detailed_scores = detailed_scores
         result.reasoning = "Evaluated using Azure AI Foundry built-in evaluators"
 
-        logger.info(f"Foundry evaluation completed for question_id: {request.question_id}")
+        logger.info(f"Foundry evaluation completed for question_id: {request.question_id} with {len(scores)} metrics executed in parallel")
         return result
 
     async def _run_evaluator(self, evaluator_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Run Foundry evaluator using subprocess approach to avoid HTTP client conflicts.
-        This method always uses the subprocess approach for reliability and consistency.
+        Run Foundry evaluator using async subprocess approach for true parallel execution.
+        This method uses the async subprocess approach for reliability and parallel processing.
         """
         try:
-            logger.info(f"Running {evaluator_name} evaluator using subprocess approach...")
+            logger.info(f"Running {evaluator_name} evaluator using async subprocess approach...")
             
-            from .foundry_evaluator_subprocess import run_foundry_evaluation
+            from .foundry_evaluator_subprocess import run_foundry_evaluation_async
             
             # Map evaluator names to class names
             evaluator_class_map = {
@@ -583,8 +687,8 @@ class FoundryEvaluator:
             api_key = settings.AZURE_EVALUATION_API_KEY or settings.AZURE_OPENAI_API_KEY
             deployment = settings.AZURE_EVALUATION_MODEL_DEPLOYMENT or settings.AZURE_OPENAI_DEPLOYMENT_NAME
             
-            # Run evaluation in subprocess
-            result = run_foundry_evaluation(
+            # Run evaluation in async subprocess for true parallelism
+            result = await run_foundry_evaluation_async(
                 evaluator_name=evaluator_class,
                 query=data["query"],
                 response=data["response"],
@@ -595,7 +699,7 @@ class FoundryEvaluator:
                 api_version=settings.AZURE_OPENAI_API_VERSION
             )
             
-            logger.info(f"Subprocess evaluation successful for {evaluator_name}: {result}")
+            logger.info(f"Async subprocess evaluation successful for {evaluator_name}: {result}")
             return result
             
         except Exception as e:
