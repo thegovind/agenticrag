@@ -13,7 +13,9 @@ from app.models.schemas import (
     SourceVerificationRequest,
     SourceVerificationResponse,
     Citation,
-    PerformanceMetrics
+    PerformanceMetrics,
+    EvaluationRequest,
+    EvaluatorType
 )
 from app.core.observability import observability
 # Temporarily disable evaluation due to package conflicts
@@ -25,6 +27,7 @@ from app.services.token_usage_tracker import TokenUsageTracker, ServiceType, Ope
 from app.services.performance_tracker import performance_tracker
 from app.services.traditional_rag_service import TraditionalRAGService
 from app.services.agentic_vector_rag_service import AgenticVectorRAGService
+from app.services.evaluation_service import evaluation_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -220,7 +223,7 @@ async def ask_question(
                 # Agentic Vector RAG returns properly formatted citations directly
                 logger.info(f"🔍 DEBUG: Processing {len(qa_result.get('citations', []))} citations from agentic-vector RAG")
                 for citation_data in qa_result.get("citations", []):
-                    logger.info(f"🔍 DEBUG: Citation data before processing: {citation_data}")
+                    #logger.info(f"🔍 DEBUG: Citation data before processing: {citation_data}")
                     citations.append(Citation(**citation_data))
             else:
                 # Agent RAG returns sources that need to be converted to citations
@@ -285,40 +288,43 @@ async def ask_question(
                     "credibility_score": getattr(citation, 'credibility_score', 0.5)
                 })
 
+            # Evaluation integration
             evaluation_results = []
-            # Temporarily disable evaluation due to package conflicts
-            try:
-                # eval_framework = get_evaluation_framework()
-                # evaluation_results = await eval_framework.evaluate_response(
-                #     query=request.question,
-                #     response=answer,
-                #     sources=sources,
-                #     session_id=session_id,
-                #     model_used=request.chat_model,
-                #     response_time=response_time,
-                #     financial_context={
-                #         "user_id": x_user_id,
-                #         "exercise_type": "qa",
-                #         "embedding_model": request.embedding_model,
-                #         "verification_level": request.verification_level
-                #     }
-                # )
-                
-                eval_data = []
-                # eval_data = [
-                #     {
-                #         "metric": result.metric,
-                #         "score": result.score,
-                #         "model_used": result.model_used,
-                #         "reasoning": result.reasoning
-                #     }
-                #     for result in evaluation_results
-                # ]                observability.track_evaluation_metrics(session_id, eval_data)
-                
-                span.set_attribute("evaluation.count", len(evaluation_results))
-                span.set_attribute("evaluation.avg_score", 0)
-            except Exception as e:
-                logger.warning(f"Evaluation failed for QA session {session_id}: {e}")
+            evaluation_id = None
+            
+            if request.evaluation_enabled:
+                try:
+                    logger.info(f"Starting evaluation for question_id: {question_id}")
+                    
+                    # Create evaluation request
+                    evaluation_request = EvaluationRequest(
+                        question_id=question_id,
+                        session_id=session_id,
+                        evaluator_type=request.evaluator_type,
+                        rag_method=request.rag_method,
+                        evaluation_model=request.evaluation_model,
+                        question=request.question,
+                        answer=answer,
+                        context=[c.content for c in citations],
+                        ground_truth=None  # For now, we don't have ground truth
+                    )
+                    
+                    # Start async evaluation
+                    evaluation_result = await evaluation_service.evaluate_answer(evaluation_request, azure_manager)
+                    evaluation_id = evaluation_result.id  # Extract the ID from the result
+                    logger.info(f"Evaluation completed with ID: {evaluation_id}")
+                    
+                    # Track evaluation metrics for observability
+                    span.set_attribute("evaluation.enabled", True)
+                    span.set_attribute("evaluation.id", evaluation_id)
+                    span.set_attribute("evaluation.type", request.evaluator_type.value)
+                    span.set_attribute("evaluation.model", request.evaluation_model or "unknown")
+                    
+                except Exception as e:
+                    logger.error(f"Evaluation failed for question_id {question_id}: {e}")
+                    span.set_attribute("evaluation.error", str(e))
+            else:
+                span.set_attribute("evaluation.enabled", False)
             
             # Complete synthesis step and finalize reasoning chain
             performance_tracker.complete_reasoning_step(
@@ -376,6 +382,10 @@ async def ask_question(
                     "embedding_model": embedding_deployment_used,
                     "temperature": request.temperature,
                     "verification_level": request.verification_level,
+                    "evaluation_enabled": request.evaluation_enabled,
+                    "evaluation_id": evaluation_id,
+                    "evaluator_type": request.evaluator_type.value if request.evaluation_enabled else None,
+                    "evaluation_model": request.evaluation_model if request.evaluation_enabled else None,
                     "evaluation_count": len(evaluation_results),
                     "avg_evaluation_score": sum(r.score for r in evaluation_results) / len(evaluation_results) if evaluation_results else 0,
                     "response_time": response_time,
@@ -383,8 +393,8 @@ async def ask_question(
                 },
                 token_usage=token_usage)
             
-            logger.info(f"🔍 DEBUG: Response reasoning_chain question_id: {response.reasoning_chain.question_id if response.reasoning_chain else 'None'}")
-            logger.info(f"🔍 DEBUG: Response reasoning_chain available: {response.reasoning_chain is not None}")
+            #logger.info(f"🔍 DEBUG: Response reasoning_chain question_id: {response.reasoning_chain.question_id if response.reasoning_chain else 'None'}")
+            #logger.info(f"🔍 DEBUG: Response reasoning_chain available: {response.reasoning_chain is not None}")
             
             span.set_attribute("response.tokens", total_tokens)
             span.set_attribute("response.citations", len(citations))

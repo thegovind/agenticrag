@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { Activity, MessageSquare, DollarSign, AlertTriangle, CheckCircle, XCircle, TrendingUp, Database, Cpu, HardDrive, Settings, Zap, BarChart3, RefreshCw } from 'lucide-react';
 import { ModelConfiguration, ModelConfiguration as ModelConfigType } from './ModelConfiguration';
+import { EvaluationAnalytics } from './EvaluationAnalytics';
 import { apiService } from '../../services/api';
 
 interface MetricData {
@@ -799,105 +800,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isActive = true 
         </TabsContent>
 
         <TabsContent value="evaluation" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <Settings className="h-5 w-5" />
-                    Evaluation Framework Configuration
-                  </CardTitle>
-                  <CardDescription>
-                    Choose the evaluation framework for assessing RAG and agent performance
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Select
-                    value={evaluationFramework}
-                    onValueChange={(value: 'custom' | 'azure_ai_foundry' | 'hybrid') => updateEvaluationFramework(value)}
-                    disabled={isUpdatingFramework}
-                  >
-                    <SelectTrigger className="w-48">
-                      <SelectValue placeholder="Select framework" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="custom">
-                        <div className="flex flex-col">
-                          <span className="font-medium">Custom Evaluators</span>
-                          <span className="text-xs text-muted-foreground">Built-in evaluation metrics</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="azure_ai_foundry">
-                        <div className="flex flex-col">
-                          <span className="font-medium">Azure AI Foundry</span>
-                          <span className="text-xs text-muted-foreground">RAG &amp; Agent evaluators</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="hybrid">
-                        <div className="flex flex-col">
-                          <span className="font-medium">Hybrid Approach</span>
-                          <span className="text-xs text-muted-foreground">Both custom and Azure AI Foundry</span>
-                        </div>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {isUpdatingFramework && (
-                    <div className="text-sm text-muted-foreground">Updating...</div>
-                  )}
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span>Current Framework:</span>
-                  <Badge variant={evaluationFramework === 'custom' ? 'default' : evaluationFramework === 'azure_ai_foundry' ? 'secondary' : 'outline'}>
-                    {evaluationFramework === 'custom' ? 'Custom' : evaluationFramework === 'azure_ai_foundry' ? 'Azure AI Foundry' : 'Hybrid'}
-                  </Badge>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {evaluationFramework === 'custom' && 'Using built-in evaluation metrics for relevance, groundedness, coherence, and financial accuracy.'}
-                  {evaluationFramework === 'azure_ai_foundry' && 'Using Azure AI Foundry RAG and Agent evaluators for comprehensive assessment.'}
-                  {evaluationFramework === 'hybrid' && 'Combining both custom and Azure AI Foundry evaluators for maximum coverage.'}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {evaluationMetrics.map((metric) => (
-              <Card key={metric.id}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-base">{metric.name}</CardTitle>
-                    <div className={`flex items-center gap-1 ${getStatusColor(metric.status)}`}>
-                      {getStatusIcon(metric.status)}
-                      <Badge variant={metric.status === 'pass' ? 'default' : metric.status === 'warning' ? 'secondary' : 'destructive'}>
-                        {metric.status}
-                      </Badge>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Score</span>
-                      <span className="font-medium">{(metric.score * 100).toFixed(1)}%</span>
-                    </div>
-                    <Progress value={metric.score * 100} className="h-2" />
-                    <div className="flex justify-between text-sm">
-                      <span>Threshold</span>
-                      <span>{(metric.threshold * 100).toFixed(1)}%</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">{metric.description}</p>
-                    <p className="text-xs text-muted-foreground">
-                      Last updated: {new Date(metric.lastUpdated).toLocaleString()}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <EvaluationAnalytics />
         </TabsContent>
 
         <TabsContent value="model-config" className="space-y-4">

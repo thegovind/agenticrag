@@ -51,6 +51,22 @@ export interface KnowledgeBaseMetrics {
   last_updated: string;
 }
 
+export interface AvailableEvaluatorsResponse {
+  available_evaluators: {
+    foundry: {
+      available: boolean;
+      metrics: string[];
+    };
+    custom: {
+      available: boolean;
+      metrics: string[];
+    };
+  };
+  evaluator_types: string[];
+  evaluation_metrics: string[];
+  evaluation_models: string[];
+}
+
 class ApiService {
   private async makeRequest<T>(
     endpoint: string,
@@ -225,6 +241,9 @@ class ApiService {
     temperature?: number;
     credibility_check_enabled?: boolean;
     rag_method?: 'agent' | 'traditional' | 'llamaindex' | 'agentic-vector';
+    evaluation_enabled?: boolean;
+    evaluator_type?: 'foundry' | 'custom';
+    evaluation_model?: string;
   }): Promise<{
     answer: string;
     session_id: string;
@@ -424,6 +443,151 @@ class ApiService {
 
   async getQuestionPerformanceMetrics(questionId: string): Promise<any> {
     return this.makeRequest(`/qa/performance-metrics/question/${questionId}`);
+  }
+
+  // Evaluation endpoints
+  async getEvaluationResult(evaluationId: string): Promise<{
+    id: string;
+    question_id: string;
+    session_id: string;
+    evaluator_type: string;
+    rag_method: string;
+    groundedness_score?: number;
+    relevance_score?: number;
+    coherence_score?: number;
+    fluency_score?: number;
+    similarity_score?: number;
+    f1_score?: number;
+    bleu_score?: number;
+    rouge_score?: number;
+    overall_score?: number;
+    evaluation_model: string;
+    evaluation_timestamp: string;
+    evaluation_duration_ms?: number;
+    question: string;
+    answer: string;
+    context: string[];
+    ground_truth?: string;
+    detailed_scores: any;
+    reasoning?: string;
+    feedback?: string;
+    recommendations: string[];
+    error?: string;
+  }> {
+    return this.makeRequest(`/evaluation/result/${evaluationId}`, {
+      method: 'GET',
+    });
+  }
+
+  async getEvaluationSummary(params: {
+    session_id?: string;
+    question_id?: string;
+    rag_method?: string;
+    evaluator_type?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<{
+    total_evaluations: number;
+    avg_overall_score: number;
+    avg_groundedness_score: number;
+    avg_relevance_score: number;
+    avg_coherence_score: number;
+    avg_fluency_score: number;
+    evaluations_by_rag_method: any;
+    evaluations_by_evaluator_type: any;
+    recent_evaluations: any[];
+  }> {
+    const queryParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value) queryParams.append(key, value);
+    });
+    
+    return this.makeRequest(`/evaluation/summary?${queryParams.toString()}`, {
+      method: 'GET',
+    });
+  }
+
+  // Evaluation API methods
+  async getEvaluationAnalytics(params: {
+    days?: number;
+    evaluator_type?: string;
+    rag_method?: string;
+  } = {}): Promise<any> {
+    const searchParams = new URLSearchParams();
+    if (params.days) searchParams.append('days', params.days.toString());
+    if (params.evaluator_type && params.evaluator_type !== 'all') {
+      searchParams.append('evaluator_type', params.evaluator_type);
+    }
+    if (params.rag_method && params.rag_method !== 'all') {
+      searchParams.append('rag_method', params.rag_method);
+    }
+    
+    return this.makeRequest(`/evaluation/analytics?${searchParams.toString()}`);
+  }
+
+  async getSessionEvaluationSummary(sessionId: string, params: {
+    evaluator_type?: string;
+    rag_method?: string;
+  } = {}): Promise<any> {
+    const searchParams = new URLSearchParams();
+    if (params.evaluator_type && params.evaluator_type !== 'all') {
+      searchParams.append('evaluator_type', params.evaluator_type);
+    }
+    if (params.rag_method && params.rag_method !== 'all') {
+      searchParams.append('rag_method', params.rag_method);
+    }
+    
+    return this.makeRequest(`/evaluation/summary/session/${sessionId}?${searchParams.toString()}`);
+  }
+
+  async getEvaluationResultsByQuestion(questionId: string): Promise<any[]> {
+    return this.makeRequest(`/evaluation/results/question/${questionId}`);
+  }
+
+  async getEvaluationResultsBySession(sessionId: string, params: {
+    evaluator_type?: string;
+    rag_method?: string;
+    limit?: number;
+  } = {}): Promise<any[]> {
+    const searchParams = new URLSearchParams();
+    if (params.evaluator_type && params.evaluator_type !== 'all') {
+      searchParams.append('evaluator_type', params.evaluator_type);
+    }
+    if (params.rag_method && params.rag_method !== 'all') {
+      searchParams.append('rag_method', params.rag_method);
+    }
+    if (params.limit) {
+      searchParams.append('limit', params.limit.toString());
+    }
+    
+    return this.makeRequest(`/evaluation/results/session/${sessionId}?${searchParams.toString()}`);
+  }
+
+  async getAvailableEvaluators(): Promise<AvailableEvaluatorsResponse> {
+    return this.makeRequest('/evaluation/evaluators');
+  }
+
+  async evaluateAnswer(request: {
+    question_id: string;
+    session_id: string;
+    evaluator_type: string;
+    rag_method: string;
+    question: string;
+    answer: string;
+    context: string[];
+    evaluation_model?: string;
+    ground_truth?: string;
+  }): Promise<any> {
+    return this.makeRequest('/evaluation/evaluate', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  async deleteEvaluationResults(sessionId: string): Promise<any> {
+    return this.makeRequest(`/evaluation/results/session/${sessionId}`, {
+      method: 'DELETE',
+    });
   }
 }
 

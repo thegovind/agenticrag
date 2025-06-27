@@ -11,6 +11,7 @@ import { QuestionDecomposition } from './QuestionDecomposition';
 import { AgentServiceStatus } from './AgentServiceStatus';
 import { PerformanceDashboard } from './PerformanceDashboard';
 import { ReasoningChainDisplay } from './ReasoningChainDisplay';
+import { EvaluationModal } from './EvaluationModal';
 import { ModelSettings } from '../shared/ModelConfiguration';
 import { apiService } from '../../services/api';
 
@@ -77,6 +78,10 @@ export interface QAAnswer {
     agentId?: string;
     threadId?: string;
     rag_method?: string;
+    evaluation_enabled?: boolean;
+    evaluation_id?: string;
+    evaluator_type?: string;
+    evaluation_model?: string;
   };
 }
 
@@ -127,6 +132,21 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
   const [agentServiceConnected, setAgentServiceConnected] = useState(false);
   const [credibilityCheckEnabled, setCredibilityCheckEnabled] = useState(false); // Off by default
   const [ragMethod, setRagMethod] = useState<'agent' | 'traditional' | 'llamaindex' | 'agentic-vector'>('agent'); // Default to current implementation
+  const [evaluationEnabled, setEvaluationEnabled] = useState(false); // Off by default
+  const [evaluatorType, setEvaluatorType] = useState<'foundry' | 'custom'>('custom'); // Default to custom
+  const [evaluationModel, setEvaluationModel] = useState<string>('o3-mini'); // Default evaluation model
+  const [showEvaluationModal, setShowEvaluationModal] = useState(false);
+  const [selectedEvaluationId, setSelectedEvaluationId] = useState<string | null>(null);
+  const [evaluationResults, setEvaluationResults] = useState<{[key: string]: any}>({});
+  const [availableEvaluationModels, setAvailableEvaluationModels] = useState<Array<{id: string, name: string, provider: string, model_name?: string}>>([
+    { id: 'o3-mini', name: 'o3-mini', provider: 'Custom' },
+    { id: 'gpt-4o', name: 'gpt-4o', provider: 'Custom' },
+    { id: 'gpt-4o-mini', name: 'gpt-4o-mini', provider: 'Custom' },
+    { id: 'gpt-4-turbo', name: 'gpt-4-turbo', provider: 'Custom' },
+    { id: 'gpt-4', name: 'gpt-4', provider: 'Custom' }
+  ]);
+  const [isLoadingEvaluationModels, setIsLoadingEvaluationModels] = useState(false);
+  const [availableEvaluators, setAvailableEvaluators] = useState<{foundry_available: boolean, custom_available: boolean} | null>(null);
   const [showReasoningChain, setShowReasoningChain] = useState(false);
   const [sessionMetrics, setSessionMetrics] = useState<any>(null);
   const [selectedReasoningChain, setSelectedReasoningChain] = useState<any>(null);
@@ -151,7 +171,102 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     localStorage.setItem('qaSessionId', sessionId);
     
     checkAgentServiceStatus();
+    checkAvailableEvaluators();
   }, []);
+
+  useEffect(() => {
+    // Fetch evaluation models when evaluator type changes to foundry
+    if (evaluatorType === 'foundry') {
+      fetchEvaluationModels();
+    } else {
+      // Reset to default custom models
+      setAvailableEvaluationModels([
+        { id: 'o3-mini', name: 'o3-mini', provider: 'Custom' },
+        { id: 'gpt-4o', name: 'gpt-4o', provider: 'Custom' },
+        { id: 'gpt-4o-mini', name: 'gpt-4o-mini', provider: 'Custom' },
+        { id: 'gpt-4-turbo', name: 'gpt-4-turbo', provider: 'Custom' },
+        { id: 'gpt-4', name: 'gpt-4', provider: 'Custom' }
+      ]);
+      // Set default model for custom
+      if (!['o3-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4'].includes(evaluationModel)) {
+        setEvaluationModel('o3-mini');
+      }
+    }
+  }, [evaluatorType]);
+
+  const fetchEvaluationModels = async () => {
+    setIsLoadingEvaluationModels(true);
+    try {
+      if (evaluatorType === 'foundry') {
+        // Check if foundry is available
+        if (!availableEvaluators || !availableEvaluators.foundry_available) {
+          console.warn('Foundry evaluator not available, switching to custom');
+          setEvaluatorType('custom');
+          setAvailableEvaluationModels([
+            { id: 'o3-mini', name: 'o3-mini', provider: 'Custom', model_name: 'o3-mini' },
+            { id: 'gpt-4o', name: 'gpt-4o', provider: 'Custom', model_name: 'gpt-4o' },
+            { id: 'gpt-4o-mini', name: 'gpt-4o-mini', provider: 'Custom', model_name: 'gpt-4o-mini' },
+            { id: 'gpt-4-turbo', name: 'gpt-4-turbo', provider: 'Custom', model_name: 'gpt-4-turbo' },
+            { id: 'gpt-4', name: 'gpt-4', provider: 'Custom', model_name: 'gpt-4' }
+          ]);
+          setEvaluationModel('o3-mini');
+          return;
+        }
+        
+        // Fetch foundry models (deployment names)
+        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+        const response = await fetch(`${apiBaseUrl}/admin/foundry/models`);
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch models: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        const foundryModels = data.models || [];
+        
+        const evaluationModelsList: Array<{id: string, name: string, provider: string}> = [];
+        
+        foundryModels.forEach((model: any) => {
+          if (model.type === 'chat') {
+            evaluationModelsList.push({
+              id: model.deployment_name || model.id, // Use deployment name for API calls
+              name: model.name, // Display name with deployment name
+              provider: 'Azure AI Foundry',
+              model_name: model.model_name // Store model name for evaluation
+            });
+          }
+        });
+        
+        if (evaluationModelsList.length > 0) {
+          setAvailableEvaluationModels(evaluationModelsList);
+          // Set default to first available foundry model
+          const preferredModel = evaluationModelsList.find(m => 
+            m.id.includes('o3') || m.id.includes('gpt-4o') || m.id.includes('gpt-4')
+          );
+          setEvaluationModel(preferredModel ? preferredModel.id : evaluationModelsList[0].id);
+        } else {
+          // Fallback to custom models if no foundry models available
+          setAvailableEvaluationModels([
+            { id: 'o3-mini', name: 'o3-mini (Fallback)', provider: 'Custom', model_name: 'o3-mini' },
+            { id: 'gpt-4o', name: 'gpt-4o (Fallback)', provider: 'Custom', model_name: 'gpt-4o' }
+          ]);
+          setEvaluationModel('o3-mini');
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error fetching evaluation models:', error);
+      // Fallback to custom models on error
+      setEvaluatorType('custom');
+      setAvailableEvaluationModels([
+        { id: 'o3-mini', name: 'o3-mini (Fallback)', provider: 'Custom', model_name: 'o3-mini' },
+        { id: 'gpt-4o', name: 'gpt-4o (Fallback)', provider: 'Custom', model_name: 'gpt-4o' }
+      ]);
+      setEvaluationModel('o3-mini');
+    } finally {
+      setIsLoadingEvaluationModels(false);
+    }
+  };
 
   const checkAgentServiceStatus = async () => {
     try {
@@ -160,6 +275,38 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     } catch (error) {
       console.warn('Agent service check failed:', error);
       setAgentServiceConnected(false);
+    }
+  };
+
+  const checkAvailableEvaluators = async () => {
+    try {
+      const evaluators = await apiService.getAvailableEvaluators();
+      console.log('Available evaluators response:', evaluators);
+      
+      // Handle both possible response formats
+      const foundryAvailable = (evaluators.available_evaluators as any).foundry_available || 
+                              (evaluators.available_evaluators as any).foundry?.available || 
+                              false;
+      const customAvailable = (evaluators.available_evaluators as any).custom_available || 
+                             (evaluators.available_evaluators as any).custom?.available || 
+                             false;
+      
+      setAvailableEvaluators({
+        foundry_available: foundryAvailable,
+        custom_available: customAvailable
+      });
+      
+      // If user had foundry selected but it's not available, switch to custom
+      if (evaluatorType === 'foundry' && !foundryAvailable) {
+        console.warn('Foundry evaluator not available, switching to custom');
+        setEvaluatorType('custom');
+      }
+    } catch (error) {
+      console.warn('Failed to check available evaluators:', error);
+      setAvailableEvaluators({
+        foundry_available: false,
+        custom_available: true // Assume custom is always available
+      });
     }
   };
 
@@ -179,7 +326,13 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     };
 
     setQuestions(prev => [...prev, qaQuestion]);
-    setIsLoading(true);    try {      const data = await apiService.askQuestion({
+    setIsLoading(true);    try {      const selectedModel = availableEvaluationModels.find(m => m.id === evaluationModel);
+      // For foundry evaluators, use deployment name (id), for custom use model name
+      const modelForEvaluation = evaluatorType === 'foundry' 
+        ? evaluationModel  // This is already the deployment name/id
+        : (selectedModel?.model_name || evaluationModel);
+
+      const data = await apiService.askQuestion({
         question,
         session_id: currentSessionId,
         verification_level: verificationLevel,
@@ -188,6 +341,9 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
         temperature: modelSettings.temperature,
         credibility_check_enabled: credibilityCheckEnabled, // Pass the toggle state
         rag_method: ragMethod, // Pass the selected RAG method
+        evaluation_enabled: evaluationEnabled, // Pass evaluation toggle state
+        evaluator_type: evaluatorType, // Pass evaluator type
+        evaluation_model: modelForEvaluation, // Pass evaluation model (model_name for foundry, deployment name for custom)
       });
         const qaAnswer: QAAnswer = {
         id: (Date.now() + 1).toString(),
@@ -214,6 +370,10 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
           agentId: data.verification_details?.agent_id,
           threadId: data.verification_details?.thread_id,
           rag_method: ragMethod, // Add the RAG method used for this answer
+          evaluation_enabled: evaluationEnabled,
+          evaluation_id: data.metadata?.evaluation_id,
+          evaluator_type: data.metadata?.evaluator_type,
+          evaluation_model: data.metadata?.evaluation_model,
         },
       };
 
@@ -370,6 +530,19 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
     }
   };
 
+  // Evaluation handlers
+  const handleShowEvaluation = async (evaluationId: string) => {
+    try {
+      console.log('handleShowEvaluation called with:', evaluationId, 'type:', typeof evaluationId);
+      const result = await apiService.getEvaluationResult(evaluationId);
+      setEvaluationResults(prev => ({ ...prev, [evaluationId]: result }));
+      setSelectedEvaluationId(evaluationId);
+      setShowEvaluationModal(true);
+    } catch (error) {
+      console.error('Error fetching evaluation result:', error);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-background">
       <ResizablePanelGroup direction="horizontal" className="min-h-screen">
@@ -407,8 +580,11 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                           onVerifySources={() => handleVerifySources(answer)}
                           onShowReasoningChain={answer.reasoningChain ? () => handleShowReasoningChain(answer.reasoningChain?.question_id || '') : undefined}
                           onShowPerformance={answer.questionId ? () => handleShowQuestionPerformance(answer.questionId) : undefined}
+                          onShowEvaluation={answer.metadata.evaluation_id ? () => handleShowEvaluation(String(answer.metadata.evaluation_id || '')) : undefined}
                           isVerifyingSources={isVerifyingSourcesForAnswer === answer.id}
                           credibilityCheckEnabled={credibilityCheckEnabled}
+                          evaluationEnabled={evaluationEnabled}
+                          evaluationId={answer.metadata.evaluation_id}
                         />
                       )}
                     </div>
@@ -493,6 +669,70 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                     Credibility Check
                   </Label>
                 </div>
+                
+                {/* Evaluation Toggle */}
+                <div className="flex items-center space-x-2 ml-4">
+                  <Switch
+                    id="evaluation-enabled"
+                    checked={evaluationEnabled}
+                    onCheckedChange={setEvaluationEnabled}
+                  />
+                  <Label htmlFor="evaluation-enabled" className="text-xs text-muted-foreground">
+                    Evaluation
+                  </Label>
+                </div>
+                
+                {/* Evaluator Type Selection */}
+                {evaluationEnabled && (
+                  <div className="flex items-center space-x-2 ml-4">
+                    <Label className="text-xs text-muted-foreground">Type:</Label>
+                    <Select value={evaluatorType} onValueChange={(value) => setEvaluatorType(value as 'foundry' | 'custom')}>
+                      <SelectTrigger className="w-20 h-6 text-xs border-none shadow-none p-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="custom">Custom</SelectItem>
+                        {availableEvaluators?.foundry_available && (
+                          <SelectItem value="foundry">Foundry</SelectItem>
+                        )}
+                        {!availableEvaluators?.foundry_available && availableEvaluators !== null && (
+                          <SelectItem value="foundry" disabled>
+                            <div className="flex items-center space-x-1">
+                              <span>Foundry</span>
+                              <span className="text-xs text-muted-foreground">(Unavailable)</span>
+                            </div>
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                
+                {/* Evaluation Model Selection */}
+                {evaluationEnabled && (
+                  <div className="flex items-center space-x-2 ml-4">
+                    <Label className="text-xs text-muted-foreground">Model:</Label>
+                    <Select value={evaluationModel} onValueChange={setEvaluationModel}>
+                      <SelectTrigger className="w-32 h-6 text-xs border-none shadow-none p-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {isLoadingEvaluationModels ? (
+                          <SelectItem value="loading" disabled>Loading models...</SelectItem>
+                        ) : (
+                          availableEvaluationModels.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              <div className="flex flex-col">
+                                <span>{model.name}</span>
+                                <span className="text-xs text-muted-foreground">{model.provider}</span>
+                              </div>
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 
                 <span className="text-xs text-muted-foreground">{/* separator */}</span>
                 <span className="text-xs text-muted-foreground">
@@ -587,6 +827,27 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                   />
                 </div>
               )}
+              
+              {/* Evaluation Result Modal */}
+              {showEvaluationModal && selectedEvaluationId && (
+                <div className="p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium">📋 Evaluation Result</h3>
+                    <button
+                      onClick={() => setShowEvaluationModal(false)}
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      ✕ Close
+                    </button>
+                  </div>
+                  <div className="text-sm text-muted-foreground mb-4">
+                    Evaluation ID: <span className="text-foreground">{selectedEvaluationId}</span>
+                  </div>
+                  <pre className="bg-muted p-4 rounded-md text-xs overflow-auto">
+                    {JSON.stringify(evaluationResults[selectedEvaluationId], null, 2)}
+                  </pre>
+                </div>
+              )}
             </ResizablePanel>
           </>
         )}
@@ -597,6 +858,13 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
         verifiedSources={verifiedSources}
         isOpen={showSourceVerificationModal}
         onClose={() => setShowSourceVerificationModal(false)}
+      />
+      
+      {/* Evaluation Result Modal */}
+      <EvaluationModal
+        isOpen={showEvaluationModal}
+        onClose={() => setShowEvaluationModal(false)}
+        evaluationResult={selectedEvaluationId ? evaluationResults[selectedEvaluationId] : null}
       />
     </div>
   );

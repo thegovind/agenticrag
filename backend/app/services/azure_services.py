@@ -1244,3 +1244,149 @@ class AzureServiceManager:
             logger.error(f"Error checking if document exists: {e}")
             # In case of error, assume document doesn't exist to allow processing
             return False
+
+    async def save_evaluation_result(self, evaluation_result: Dict[str, Any]) -> bool:
+        """Save evaluation result to CosmosDB"""
+        try:
+            database = self.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
+            container = database.get_container_client(settings.AZURE_COSMOS_EVALUATION_CONTAINER_NAME)
+            
+            # Prepare the document for storage
+            evaluation_doc = {
+                "id": evaluation_result.get("id"),
+                "question_id": evaluation_result.get("question_id"),
+                "session_id": evaluation_result.get("session_id"),
+                "evaluator_type": evaluation_result.get("evaluator_type"),
+                "rag_method": evaluation_result.get("rag_method"),
+                "evaluation_model": evaluation_result.get("evaluation_model"),
+                "question": evaluation_result.get("question"),
+                "answer": evaluation_result.get("answer"),
+                "context": evaluation_result.get("context"),
+                "ground_truth": evaluation_result.get("ground_truth"),
+                "groundedness_score": evaluation_result.get("groundedness_score"),
+                "relevance_score": evaluation_result.get("relevance_score"),
+                "coherence_score": evaluation_result.get("coherence_score"),
+                "fluency_score": evaluation_result.get("fluency_score"),
+                "similarity_score": evaluation_result.get("similarity_score"),
+                "f1_score": evaluation_result.get("f1_score"),
+                "bleu_score": evaluation_result.get("bleu_score"),
+                "rouge_score": evaluation_result.get("rouge_score"),
+                "overall_score": evaluation_result.get("overall_score"),
+                "detailed_scores": evaluation_result.get("detailed_scores"),
+                "reasoning": evaluation_result.get("reasoning"),
+                "feedback": evaluation_result.get("feedback"),
+                "recommendations": evaluation_result.get("recommendations"),
+                "metadata": evaluation_result.get("metadata"),
+                "error_message": evaluation_result.get("error_message"),
+                "evaluation_timestamp": evaluation_result.get("evaluation_timestamp"),
+                "evaluation_duration_ms": evaluation_result.get("evaluation_duration_ms"),
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            
+            # Convert datetime objects to ISO format strings for JSON serialization
+            if evaluation_doc["evaluation_timestamp"] and hasattr(evaluation_doc["evaluation_timestamp"], 'isoformat'):
+                evaluation_doc["evaluation_timestamp"] = evaluation_doc["evaluation_timestamp"].isoformat()
+            
+            container.upsert_item(evaluation_doc)
+            logger.info(f"Evaluation result {evaluation_result.get('id')} saved to CosmosDB")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to save evaluation result: {e}")
+            return False
+
+    async def get_evaluation_result(self, evaluation_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve evaluation result from CosmosDB"""
+        try:
+            database = self.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
+            container = database.get_container_client(settings.AZURE_COSMOS_EVALUATION_CONTAINER_NAME)
+            
+            # Since partition key is session_id, we need to query by evaluation_id instead of direct read
+            query = "SELECT * FROM c WHERE c.id = @evaluation_id"
+            parameters = [{"name": "@evaluation_id", "value": evaluation_id}]
+            
+            try:
+                items = list(container.query_items(
+                    query=query,
+                    parameters=parameters,
+                    enable_cross_partition_query=True,
+                    max_item_count=1
+                ))
+                
+                if items:
+                    logger.info(f"Retrieved evaluation result {evaluation_id} from CosmosDB")
+                    return items[0]
+                else:
+                    logger.info(f"Evaluation result {evaluation_id} not found in CosmosDB")
+                    return None
+                    
+            except Exception as e:
+                logger.error(f"Failed to retrieve evaluation result {evaluation_id}: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to retrieve evaluation result: {e}")
+            return None
+
+    async def list_evaluation_results(self, session_id: Optional[str] = None, question_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """List evaluation results with optional filtering"""
+        try:
+            database = self.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
+            container = database.get_container_client(settings.AZURE_COSMOS_EVALUATION_CONTAINER_NAME)
+            
+            # Build query based on filters
+            if session_id:
+                query = "SELECT * FROM c WHERE c.session_id = @session_id ORDER BY c.evaluation_timestamp DESC"
+                parameters = [{"name": "@session_id", "value": session_id}]
+            elif question_id:
+                query = "SELECT * FROM c WHERE c.question_id = @question_id ORDER BY c.evaluation_timestamp DESC"
+                parameters = [{"name": "@question_id", "value": question_id}]
+            else:
+                query = "SELECT * FROM c ORDER BY c.evaluation_timestamp DESC"
+                parameters = []
+            
+            items = list(container.query_items(
+                query=query,
+                parameters=parameters,
+                max_item_count=limit,
+                enable_cross_partition_query=True
+            ))
+            
+            logger.info(f"Retrieved {len(items)} evaluation results from CosmosDB")
+            return items
+            
+        except Exception as e:
+            logger.error(f"Failed to list evaluation results: {e}")
+            return []
+
+    async def delete_evaluation_results(self, session_id: str) -> int:
+        """Delete evaluation results for a session"""
+        try:
+            database = self.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
+            container = database.get_container_client(settings.AZURE_COSMOS_EVALUATION_CONTAINER_NAME)
+            
+            # Query for evaluation results in the session
+            query = "SELECT c.id FROM c WHERE c.session_id = @session_id"
+            parameters = [{"name": "@session_id", "value": session_id}]
+            
+            items = list(container.query_items(
+                query=query,
+                parameters=parameters,
+                enable_cross_partition_query=True
+            ))
+            
+            deleted_count = 0
+            for item in items:
+                try:
+                    # Use session_id as partition key since that's what the container is configured with
+                    container.delete_item(item=item["id"], partition_key=session_id)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to delete evaluation result {item['id']}: {e}")
+            
+            logger.info(f"Deleted {deleted_count} evaluation results for session {session_id}")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"Error deleting evaluation results: {e}")
+            return 0

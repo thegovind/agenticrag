@@ -82,10 +82,29 @@ class Settings(BaseSettings):
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "200"))
     max_chunks_per_document: int = int(os.getenv("MAX_CHUNKS_PER_DOCUMENT", "500"))
     
-    evaluation_enabled: bool = os.getenv("EVALUATION_ENABLED", "true").lower() == "true"
-    evaluation_model: str = os.getenv("EVALUATION_MODEL", "gpt-4")
-    evaluation_temperature: float = float(os.getenv("EVALUATION_TEMPERATURE", "0.1"))
-    evaluation_max_tokens: int = int(os.getenv("EVALUATION_MAX_TOKENS", "500"))
+    # Evaluation Configuration
+    AZURE_EVALUATION_ENDPOINT: str = os.getenv("AZURE_EVALUATION_ENDPOINT", "")
+    AZURE_EVALUATION_API_KEY: str = os.getenv("AZURE_EVALUATION_API_KEY", "")
+    AZURE_EVALUATION_MODEL_DEPLOYMENT: str = os.getenv("AZURE_EVALUATION_MODEL_DEPLOYMENT", "gpt-4o-mini")
+    AZURE_EVALUATION_MODEL_NAME: str = os.getenv("AZURE_EVALUATION_MODEL_NAME", "gpt-4o-mini")
+    
+    # Azure AI Foundry Configuration for Evaluation
+    AZURE_AI_PROJECT_CONNECTION_STRING: str = os.getenv("AZURE_AI_PROJECT_CONNECTION_STRING", "")
+    AZURE_AI_PROJECT_NAME: str = os.getenv("AZURE_AI_PROJECT_NAME", "")
+    AZURE_AI_HUB_NAME: str = os.getenv("AZURE_AI_HUB_NAME", "")
+    
+    # Evaluation Settings
+    EVALUATION_ENABLED: bool = os.getenv("EVALUATION_ENABLED", "true").lower() == "true"
+    DEFAULT_EVALUATOR_TYPE: str = os.getenv("DEFAULT_EVALUATOR_TYPE", "custom")  # "foundry" or "custom"
+    
+    AVAILABLE_EVALUATOR_TYPES: List[str] = ["foundry", "custom"]
+    AVAILABLE_EVALUATION_MODELS: List[str] = [
+        "o3-mini",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4-turbo",
+        "gpt-4"
+    ]
     
     rate_limit_requests_per_minute: int = int(os.getenv("RATE_LIMIT_REQUESTS_PER_MINUTE", "100"))
     rate_limit_tokens_per_minute: int = int(os.getenv("RATE_LIMIT_TOKENS_PER_MINUTE", "50000"))

@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agenticrag-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      # Application Configuration
+      - API_VERSION=v1
+      - LOG_LEVEL=INFO
+      - ENVIRONMENT=development
+      
+      # CORS for local frontend
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+    volumes:
+      - ./backend/.env:/app/.env:ro
+      - backend_logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  backend_logs:
+    driver: local

@@ -25,7 +25,7 @@ logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(l
 logging.getLogger("azure.identity").setLevel(logging.WARNING)
 
 from app.core.config import settings
-from app.api.routes import knowledge_base, chat, admin, documents, qa, sec_documents, deployments
+from app.api.routes import knowledge_base, chat, admin, documents, qa, sec_documents, deployments, evaluation
 from app.services.azure_services import AzureServiceManager
 from app.core.observability import observability, setup_fastapi_instrumentation
 from app.core.tracing import setup_ai_foundry_tracing
@@ -163,6 +163,7 @@ application.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
 application.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 application.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
 application.include_router(qa.router, prefix="/api/v1/qa", tags=["QA"])
+application.include_router(evaluation.router, prefix="/api/v1/evaluation", tags=["Evaluation"])
 application.include_router(deployments.router, prefix="/api/v1", tags=["Deployments"])
 application.include_router(sec_documents.router, tags=["SEC Documents"])
 

@@ -10,9 +10,11 @@ export default defineConfig({
     },
   },
   server: {
+    host: '0.0.0.0',  // Accept connections from any host (needed for Docker)
+    port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: process.env.NODE_ENV === 'production' ? 'http://backend:8000' : 'http://localhost:8000',
         changeOrigin: true,
         secure: false,
       }

@@ -14,8 +14,11 @@ interface AnswerDisplayProps {
   onVerifySources: () => void;
   onShowReasoningChain?: () => void;
   onShowPerformance?: () => void;
+  onShowEvaluation?: () => void;
   isVerifyingSources?: boolean;
   credibilityCheckEnabled?: boolean;
+  evaluationEnabled?: boolean;
+  evaluationId?: string;
 }
 
 export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({ 
@@ -23,8 +26,11 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
   onVerifySources, 
   onShowReasoningChain,
   onShowPerformance,
+  onShowEvaluation,
   isVerifyingSources = false,
-  credibilityCheckEnabled = false
+  credibilityCheckEnabled = false,
+  evaluationEnabled = false,
+  evaluationId
 }) => {
   const [selectedCitation, setSelectedCitation] = useState<QACitation | null>(null);
   const [showCitationModal, setShowCitationModal] = useState(false);
@@ -198,6 +204,16 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
                   className="text-xs"
                 >
                   Show Performance
+                </Button>
+              )}
+              {evaluationEnabled && evaluationId && onShowEvaluation && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onShowEvaluation}
+                  className="text-xs"
+                >
+                  Show Evaluation
                 </Button>
               )}
               {credibilityCheckEnabled && (

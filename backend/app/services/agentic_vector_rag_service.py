@@ -227,7 +227,7 @@ class AgenticVectorRAGService:
             
             # Use citations from response if available, otherwise use references
             citations = citations_from_response if citations_from_response else citations_from_references
-            logger.info(f"🔍 DEBUG: Final citations count: {len(citations)}")
+            #logger.info(f"🔍 DEBUG: Final citations count: {len(citations)}")
             if citations:
                 logger.info(f"🔍 DEBUG: Final citation structure: {citations[0]}")
             else:
@@ -386,7 +386,7 @@ class AgenticVectorRAGService:
         citations = []
         
         for i, ref in enumerate(references_data, 1):
-            logger.info(f"🔍 DEBUG: Processing reference {i}: {ref}")
+            #logger.info(f"🔍 DEBUG: Processing reference {i}: {ref}")
             # Extract information from the new reference format
             ref_id = ref.get("ref_id", i)
             title = ref.get("title", f"Document {i}")
@@ -472,7 +472,7 @@ class AgenticVectorRAGService:
                 "ref_id": ref_id
             }
             citations.append(citation)
-            logger.info(f"🔍 DEBUG: Created citation from reference: {citation}")
+            #logger.info(f"🔍 DEBUG: Created citation from reference: {citation}")
         
         logger.info(f"🔍 DEBUG: Returning {len(citations)} citations from references")
         return citations
@@ -514,7 +514,7 @@ class AgenticVectorRAGService:
                     logger.info(f"🔍 DEBUG: Processing {len(citation_data)} citation items from JSON")
                     citations = []
                     for i, item in enumerate(citation_data, 1):
-                        logger.info(f"🔍 DEBUG: Processing citation item {i}: {item}")
+                        #logger.info(f"🔍 DEBUG: Processing citation item {i}: {item}")
                         citation = {
                             "id": f"agentic_citation_{i}",
                             "content": item.get("content", "")[:500] + "..." if len(item.get("content", "")) > 500 else item.get("content", ""),
@@ -530,7 +530,7 @@ class AgenticVectorRAGService:
                             "ref_id": item.get("ref_id", i)
                         }
                         citations.append(citation)
-                        logger.info(f"🔍 DEBUG: Created citation: {citation}")
+                        #logger.info(f"🔍 DEBUG: Created citation: {citation}")
                     
                     logger.info(f"🔍 DEBUG: Parsed {len(citations)} citations from response JSON")
                     return citations

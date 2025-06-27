@@ -32,6 +32,10 @@ class DocumentStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+class EvaluatorType(str, Enum):
+    FOUNDRY = "foundry"
+    CUSTOM = "custom"
+
 class Citation(BaseModel):
     id: str = Field(default_factory=lambda: str(__import__('uuid').uuid4()))
     content: str = Field(..., description="Content of the citation")
@@ -153,6 +157,9 @@ class QARequest(BaseModel):
     max_tokens: int = Field(default=4000, ge=1, le=8000)
     credibility_check_enabled: bool = Field(default=False, description="Whether to perform credibility checks on sources")
     rag_method: str = Field(default="agent", description="RAG method to use: agent, traditional, llamaindex, agentic-vector")
+    evaluation_enabled: bool = Field(default=False, description="Whether to perform evaluation of the answer")
+    evaluator_type: EvaluatorType = Field(default=EvaluatorType.CUSTOM, description="Type of evaluator to use")
+    evaluation_model: Optional[str] = Field(default="o3-mini", description="Model to use for evaluation")
 
 class QAResponse(BaseModel):
     answer: str = Field(..., description="The comprehensive answer to the question")
@@ -344,3 +351,108 @@ class ChunkVisualizationResponse(BaseModel):
 class SECFilingsRequest(BaseModel):
     ticker: str
     limit: Optional[int] = 10
+
+# Evaluation System Models
+class EvaluationMetric(str, Enum):
+    GROUNDEDNESS = "groundedness"
+    RELEVANCE = "relevance"
+    COHERENCE = "coherence"
+    FLUENCY = "fluency"
+    SIMILARITY = "similarity"
+    F1_SCORE = "f1_score"
+    BLEU_SCORE = "bleu_score"
+    ROUGE_SCORE = "rouge_score"
+
+class EvaluationResult(BaseModel):
+    id: str = Field(default_factory=lambda: str(__import__('uuid').uuid4()))
+    question_id: str = Field(..., description="ID of the question being evaluated")
+    session_id: str = Field(..., description="Session ID for grouping evaluations")
+    evaluator_type: EvaluatorType = Field(..., description="Type of evaluator used")
+    rag_method: str = Field(..., description="RAG method that generated the answer")
+    
+    # Evaluation scores (Azure AI Foundry uses 1-5 scale, others may use 0-1 scale)
+    groundedness_score: Optional[float] = Field(None, ge=0.0, le=5.0)
+    relevance_score: Optional[float] = Field(None, ge=0.0, le=5.0)
+    coherence_score: Optional[float] = Field(None, ge=0.0, le=5.0)
+    fluency_score: Optional[float] = Field(None, ge=0.0, le=5.0)
+    similarity_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    f1_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    bleu_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    rouge_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    overall_score: Optional[float] = Field(None, ge=0.0, le=5.0)
+    
+    # Evaluation details
+    evaluation_model: str = Field(..., description="Model used for evaluation")
+    evaluation_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    evaluation_duration_ms: Optional[int] = None
+    
+    # Input data
+    question: str = Field(..., description="Original question")
+    answer: str = Field(..., description="Generated answer")
+    context: List[str] = Field(default_factory=list, description="Context/sources used")
+    ground_truth: Optional[str] = Field(None, description="Expected answer for comparison")
+    
+    # Detailed feedback
+    detailed_scores: Dict[str, Any] = Field(default_factory=dict)
+    reasoning: Optional[str] = Field(None, description="Evaluation reasoning")
+    feedback: Optional[str] = Field(None, description="Detailed feedback")
+    recommendations: List[str] = Field(default_factory=list)
+    
+    # Metadata
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    error_message: Optional[str] = None
+    
+class EvaluationRequest(BaseModel):
+    question_id: str
+    session_id: str
+    evaluator_type: EvaluatorType = EvaluatorType.CUSTOM
+    evaluation_model: Optional[str] = "o3-mini"
+    
+    # Required data for evaluation
+    question: str
+    answer: str
+    context: List[str] = Field(default_factory=list)
+    rag_method: str
+    
+    # Optional data
+    ground_truth: Optional[str] = None
+    metrics: List[EvaluationMetric] = Field(default_factory=lambda: [
+        EvaluationMetric.GROUNDEDNESS,
+        EvaluationMetric.RELEVANCE,
+        EvaluationMetric.COHERENCE,
+        EvaluationMetric.FLUENCY
+    ])
+    
+class EvaluationSummary(BaseModel):
+    session_id: str
+    total_evaluations: int
+    evaluator_type: EvaluatorType
+    rag_method: str
+    
+    # Average scores
+    avg_groundedness: Optional[float] = None
+    avg_relevance: Optional[float] = None
+    avg_coherence: Optional[float] = None
+    avg_fluency: Optional[float] = None
+    avg_overall: Optional[float] = None
+    
+    # Score distributions
+    score_distribution: Dict[str, int] = Field(default_factory=dict)
+    evaluation_count_by_metric: Dict[str, int] = Field(default_factory=dict)
+    
+    # Time range
+    start_time: datetime
+    end_time: datetime
+    
+    # Insights
+    best_performing_questions: List[str] = Field(default_factory=list)
+    worst_performing_questions: List[str] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
+
+class EvaluationResponse(BaseModel):
+    """Response for evaluation API endpoints"""
+    success: bool = Field(default=True)
+    evaluation_id: str = Field(..., description="ID of the evaluation result")
+    message: str = Field(default="Evaluation completed successfully")
+    result: Optional[EvaluationResult] = None
+    error: Optional[str] = None
