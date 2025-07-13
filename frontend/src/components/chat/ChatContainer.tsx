@@ -41,6 +41,38 @@ export interface SessionInfo {
   updated_at: string;
   message_count: number;
   user_id?: string;
+  title?: string;
+  messages?: Array<{
+    id: string;
+    role: string;
+    content: string;
+    timestamp: string;
+    metadata?: any;
+  }>;
+  metadata?: any;
+  is_active?: boolean;
+}
+
+export function validateSessionInfo(data: any): SessionInfo {
+  if (!data || typeof data !== 'object') {
+    throw new Error('Session data must be an object');
+  }
+  
+  if (!data.session_id || typeof data.session_id !== 'string') {
+    throw new Error('Session ID is required');
+  }
+  
+  return {
+    session_id: data.session_id,
+    created_at: data.created_at || new Date().toISOString(),
+    updated_at: data.updated_at || new Date().toISOString(),
+    message_count: typeof data.message_count === 'number' ? data.message_count : 0,
+    user_id: data.user_id,
+    title: data.title,
+    messages: Array.isArray(data.messages) ? data.messages : [],
+    metadata: data.metadata,
+    is_active: typeof data.is_active === 'boolean' ? data.is_active : true
+  };
 }
 
 interface ChatContainerProps {
@@ -87,7 +119,20 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ modelSettings }) =
       const response = await fetch(`${apiBaseUrl}/chat/sessions`);
       if (response.ok) {
         const sessionData = await response.json();
-        setSessions(sessionData);
+        if (sessionData && Array.isArray(sessionData)) {
+          const validatedSessions = sessionData.map((session: any) => {
+            try {
+              return validateSessionInfo(session);
+            } catch (error) {
+              console.error('Invalid session data:', session, error);
+              return null;
+            }
+          }).filter((session): session is SessionInfo => session !== null);
+          setSessions(validatedSessions);
+        } else {
+          console.error('Invalid session data received:', sessionData);
+          setSessions([]);
+        }
       }
     } catch (error) {
       console.error('Error loading session history:', error);
@@ -100,14 +145,20 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ modelSettings }) =
       const response = await fetch(`${apiBaseUrl}/chat/sessions/${sessionId}/messages`);
       if (response.ok) {
         const messagesData = await response.json();
-        const formattedMessages: Message[] = messagesData.map((msg: any) => ({
-          id: msg.id,
-          role: msg.role,
-          content: msg.content,
-          timestamp: new Date(msg.timestamp),
-          citations: msg.citations || [],
-          metadata: msg.metadata || {}
-        }));
+        const formattedMessages: Message[] = messagesData.map((msg: any) => {
+          if (!msg.id || !msg.role || !msg.content) {
+            console.warn('Invalid message data:', msg);
+            return null;
+          }
+          return {
+            id: msg.id,
+            role: msg.role as 'user' | 'assistant',
+            content: msg.content,
+            timestamp: new Date(msg.timestamp || Date.now()),
+            citations: Array.isArray(msg.citations) ? msg.citations : [],
+            metadata: msg.metadata || {}
+          };
+        }).filter(Boolean);
         setMessages(formattedMessages);
       }
     } catch (error) {

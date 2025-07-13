@@ -18,6 +18,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 import time
+from ..models.session import SessionInfo, validate_session_data, serialize_session_for_storage
 
 # Configure Windows event loop policy for Azure SDK compatibility
 if platform.system() == "Windows":
@@ -797,7 +798,7 @@ class AzureServiceManager:
         return sections
 
     async def save_session_history(self, session_id: str, message: Dict) -> bool:
-        """Save chat session history to CosmosDB"""
+        """Save chat session history to CosmosDB with proper validation"""
         try:
             database = self.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
             container = database.get_container_client(settings.AZURE_COSMOS_CONTAINER_NAME)
@@ -806,15 +807,21 @@ class AzureServiceManager:
                 session_doc = container.read_item(item=session_id, partition_key=session_id)
             except:
                 session_doc = {
-                    "id": session_id,
+                    "session_id": session_id,
                     "messages": [],
                     "created_at": message.get("timestamp"),
-                    "updated_at": message.get("timestamp")
+                    "updated_at": message.get("timestamp"),
+                    "is_active": True
                 }
+            
             session_doc["messages"].append(message)
             session_doc["updated_at"] = message.get("timestamp")
             
-            container.upsert_item(session_doc)
+            validated_session = validate_session_data(session_doc)
+            serialized_data = serialize_session_for_storage(validated_session)
+            serialized_data["id"] = session_id
+            
+            container.upsert_item(serialized_data)
             logger.info(f"Session {session_id} updated in CosmosDB")
             return True
             
@@ -823,14 +830,15 @@ class AzureServiceManager:
             return False
 
     async def get_session_history(self, session_id: str) -> List[Dict]:
-        """Retrieve chat session history from CosmosDB"""
+        """Retrieve chat session history from CosmosDB with validation"""
         try:
             database = self.cosmos_client.get_database_client(settings.AZURE_COSMOS_DATABASE_NAME)
             container = database.get_container_client(settings.AZURE_COSMOS_CONTAINER_NAME)
             
             try:
                 session_doc = container.read_item(item=session_id, partition_key=session_id)
-                return session_doc.get("messages", [])
+                validated_session = validate_session_data(session_doc)
+                return validated_session.messages
             except Exception as e:
                 # Session doesn't exist yet, return empty history
                 if "NotFound" in str(e) or "does not exist" in str(e):
